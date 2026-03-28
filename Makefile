@@ -1,16 +1,23 @@
 .PHONY: venv install test test-api test-worker
 
-venv:
-	python -m venv .venv
+VENV := .venv
+PYTHON := $(VENV)/bin/python
+PIP := $(VENV)/bin/pip
+PYTEST := $(VENV)/bin/pytest
 
-install:
-	. .venv/bin/activate && pip install -r requirements-dev.txt
+$(PYTHON):
+	python -m venv $(VENV)
 
-test:
-	. .venv/bin/activate && pytest -q tests
+venv: $(PYTHON)
 
-test-api:
-	. .venv/bin/activate && pytest -q tests/test_api_contract.py
+install: $(PYTHON)
+	$(PIP) install -r requirements-dev.txt
 
-test-worker:
-	. .venv/bin/activate && pytest -q tests/test_worker_task.py
+test: install
+	$(PYTEST) -q tests
+
+test-api: install
+	$(PYTEST) -q tests/test_api_contract.py
+
+test-worker: install
+	$(PYTEST) -q tests/test_worker_task.py
