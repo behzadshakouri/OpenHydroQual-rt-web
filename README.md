@@ -34,18 +34,16 @@ Reference scaffold for a real-time orchestration repo around OpenHydroQual/OHQue
 
 ## Quick start
 ```bash
-cd templates/openhydroqual-rt-web
-python -m venv .venv
-source .venv/bin/activate
-pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt
-uvicorn apps.api.main:app --reload --port 8000
+cd openhydroqual-rt-web
+make install
+.venv/bin/uvicorn apps.api.main:app --reload --port 8000
 ```
 
 In a second terminal:
 ```bash
-cd templates/openhydroqual-rt-web
-source .venv/bin/activate
-celery -A apps.worker.tasks worker --loglevel=info
+cd openhydroqual-rt-web
+make install
+.venv/bin/celery -A apps.worker.tasks worker --loglevel=info
 ```
 
 ## Local API smoke flow
@@ -106,8 +104,7 @@ Minimum environment variables in AWS:
 
 ## Testing
 ```bash
-cd templates/openhydroqual-rt-web
-make venv
+cd openhydroqual-rt-web
 make install
 make test
 ```
