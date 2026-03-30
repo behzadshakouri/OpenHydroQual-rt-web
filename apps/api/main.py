@@ -101,6 +101,24 @@ def _notify_external(event_type: str, job_id: str, status: str, payload: dict | 
         return False
 
 
+def _ensure_transition_allowed(current_status: str, new_status: str) -> None:
+    """!Guard simulation status transitions to keep lifecycle consistent."""
+    if current_status == new_status:
+        return
+
+    allowed: dict[str, set[str]] = {
+        "queued": {"running", "completed", "failed", "cancelled"},
+        "running": {"completed", "failed", "cancelled"},
+    }
+    if current_status in {"completed", "failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="job already finalized")
+    if new_status not in allowed.get(current_status, set()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"invalid status transition from {current_status} to {new_status}",
+        )
+
+
 _load_state()
 
 
@@ -570,6 +588,7 @@ def mark_started(job_id: str) -> dict:
         job = JOBS.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _ensure_transition_allowed(job.get("status", "unknown"), "running")
         job["status"] = "running"
         job["started_at"] = now
         job["events"].append({"at": now, "status": "running"})
@@ -586,6 +605,7 @@ def mark_completed(job_id: str, result: CompletionPayload) -> dict:
         job = JOBS.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _ensure_transition_allowed(job.get("status", "unknown"), "completed")
         job["status"] = "completed"
         job["finished_at"] = now
         job["events"].append({"at": now, "status": "completed"})
@@ -616,8 +636,7 @@ def cancel_simulation(job_id: str, reason: str | None = None) -> dict:
         job = JOBS.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
-        if job.get("status") in {"completed", "failed"}:
-            raise HTTPException(status_code=409, detail="job already finalized")
+        _ensure_transition_allowed(job.get("status", "unknown"), "cancelled")
         job["status"] = "cancelled"
         job["finished_at"] = now
         job["cancel_reason"] = reason or "cancelled by user"
@@ -635,6 +654,7 @@ def mark_failed(job_id: str, error_message: str | None = None) -> dict:
         job = JOBS.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _ensure_transition_allowed(job.get("status", "unknown"), "failed")
         job["status"] = "failed"
         job["finished_at"] = now
         job["error_message"] = error_message or "unknown error"
@@ -656,6 +676,7 @@ def post_worker_result(job_id: str, payload: WorkerResultPayload, x_internal_tok
         job = JOBS.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _ensure_transition_allowed(job.get("status", "unknown"), payload.status)
         job["status"] = payload.status
         job["finished_at"] = now
         job["events"].append({"at": now, "status": payload.status})

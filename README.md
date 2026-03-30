@@ -169,6 +169,7 @@ A GitHub Actions workflow is included at `.github/workflows/openhydroqual-rt-web
 Workers can push normalized results back to API using `POST /v1/internal/simulations/{job_id}/result`.
 Set `INTERNAL_API_TOKEN` and pass it in `X-Internal-Token` for simple protection.
 Accepted callback statuses are `completed` and `failed`.
+Lifecycle transitions are guarded; finalized jobs (`completed`/`failed`/`cancelled`) cannot transition to a different status.
 
 Example callback payload:
 
