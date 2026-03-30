@@ -57,6 +57,7 @@ the next sections describe what to build next.
   - `POST /v1/simulations/{job_id}/fail`
   - `GET /v1/simulations/{job_id}`
   - `GET /v1/simulations/{job_id}/lineage` (retry ancestry and child jobs)
+  - `GET /v1/simulations/{job_id}/timeline` (queue/run/total duration breakdown)
   - `GET /v1/simulations/{job_id}/events`
   - `GET /v1/simulations/{job_id}/events/poll` (long-poll updates after known event index)
   - `GET /v1/simulations/{job_id}/results`

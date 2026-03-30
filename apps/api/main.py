@@ -119,6 +119,16 @@ def _ensure_transition_allowed(current_status: str, new_status: str) -> None:
         )
 
 
+def _parse_iso8601_utc(value: str | None) -> datetime | None:
+    """!Parse ISO8601 timestamp to datetime, supporting trailing Z."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 _load_state()
 
 
@@ -826,6 +836,41 @@ def get_simulation_lineage(job_id: str) -> dict:
         "root_job_id": root_id,
         "lineage_chain": chain,
         "children": children,
+    }
+
+
+@app.get("/v1/simulations/{job_id}/timeline")
+def get_simulation_timeline(job_id: str) -> dict:
+    """!Return timing breakdown for a simulation lifecycle."""
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    submitted_dt = _parse_iso8601_utc(job.get("submitted_at"))
+    started_dt = _parse_iso8601_utc(job.get("started_at"))
+    finished_dt = _parse_iso8601_utc(job.get("finished_at"))
+
+    queue_seconds = None
+    run_seconds = None
+    total_seconds = None
+    if submitted_dt and started_dt:
+        queue_seconds = max((started_dt - submitted_dt).total_seconds(), 0.0)
+    if started_dt and finished_dt:
+        run_seconds = max((finished_dt - started_dt).total_seconds(), 0.0)
+    if submitted_dt and finished_dt:
+        total_seconds = max((finished_dt - submitted_dt).total_seconds(), 0.0)
+
+    status = job.get("status", "unknown")
+    return {
+        "job_id": job_id,
+        "status": status,
+        "submitted_at": job.get("submitted_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "queue_seconds": queue_seconds,
+        "run_seconds": run_seconds,
+        "total_seconds": total_seconds,
+        "is_finalized": status in {"completed", "failed", "cancelled"},
     }
 
 
