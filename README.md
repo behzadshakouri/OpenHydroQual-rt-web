@@ -2,6 +2,38 @@
 
 Reference scaffold for a real-time orchestration repo around OpenHydroQual/OHQuery.
 
+## Current status (March 30, 2026)
+This repository is currently a **starter orchestration scaffold**:
+- API and worker stubs are in place.
+- Core request/result data contracts are defined.
+- Queueing, callback, and project/site lifecycle endpoints exist.
+- Persistence and execution are still scaffold-level (in-memory/file-state + adapter stubs).
+
+If your goal is production web usage for OpenHydroQual
+([ArashMassoudieh/OpenHydroQual](https://github.com/ArashMassoudieh/OpenHydroQual)),
+the next sections describe what to build next.
+
+## What to build next (recommended sequence)
+1. **Execution integration (highest priority)**
+   - Replace stubbed execution with a robust OpenHydroQual runtime contract.
+   - Standardize input artifact generation (`.ohq`/script payloads) and output parsing.
+   - Add deterministic error mapping for engine failures/timeouts.
+2. **Persistence hardening**
+   - Move API state from in-memory/file mode to PostgreSQL-backed repositories.
+   - Add migration-backed models for projects, sites, runs, events, and result metrics.
+3. **Job orchestration robustness**
+   - Add retries/backoff, dead-letter handling, and cancellation semantics in worker flow.
+   - Add idempotent re-delivery protections for worker callback endpoint.
+4. **Web product surface**
+   - Add authn/authz, tenant/project isolation, and API tokens.
+   - Build UI/API for run submission, run history, logs, and result visualization.
+5. **Observability + operability**
+   - Expand metrics beyond counters (latency/error-rate/queue depth).
+   - Add structured logging, tracing, and run/audit correlation IDs.
+6. **Contract + integration tests**
+   - Add full integration tests against real Redis/Postgres and a mocked OpenHydroQual process.
+   - Add compatibility tests for data-contract versions across API/worker boundaries.
+
 ## Included
 - FastAPI app with:
   - `POST /v1/projects`
@@ -34,18 +66,16 @@ Reference scaffold for a real-time orchestration repo around OpenHydroQual/OHQue
 
 ## Quick start
 ```bash
-cd templates/openhydroqual-rt-web
-python -m venv .venv
-source .venv/bin/activate
-pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt
-uvicorn apps.api.main:app --reload --port 8000
+cd openhydroqual-rt-web
+make install
+.venv/bin/uvicorn apps.api.main:app --reload --port 8000
 ```
 
 In a second terminal:
 ```bash
-cd templates/openhydroqual-rt-web
-source .venv/bin/activate
-celery -A apps.worker.tasks worker --loglevel=info
+cd openhydroqual-rt-web
+make install
+.venv/bin/celery -A apps.worker.tasks worker --loglevel=info
 ```
 
 ## Local API smoke flow
@@ -106,8 +136,7 @@ Minimum environment variables in AWS:
 
 ## Testing
 ```bash
-cd templates/openhydroqual-rt-web
-make venv
+cd openhydroqual-rt-web
 make install
 make test
 ```
