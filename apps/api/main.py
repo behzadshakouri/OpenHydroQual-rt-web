@@ -828,6 +828,43 @@ def get_project_simulations_summary(project_id: str, status: str | None = None) 
     }
 
 
+@app.get("/v1/projects/{project_id}/sites/{site_id}/simulations/summary")
+def get_site_simulations_summary(project_id: str, site_id: str, status: str | None = None) -> dict:
+    """!Return aggregate simulation summary for a single site."""
+    with LOCK:
+        if project_id not in PROJECTS:
+            raise HTTPException(status_code=404, detail="project not found")
+        site_key = f"{project_id}:{site_id}"
+        if site_key not in SITES:
+            raise HTTPException(status_code=404, detail="site not found")
+
+        site_jobs = [
+            job
+            for job in JOBS.values()
+            if job.get("payload", {}).get("project_id") == project_id
+            and job.get("payload", {}).get("site_id") == site_id
+        ]
+        if status is not None:
+            site_jobs = [job for job in site_jobs if job.get("status") == status]
+
+    by_status: dict[str, int] = {}
+    for job in site_jobs:
+        job_status = job.get("status", "unknown")
+        by_status[job_status] = by_status.get(job_status, 0) + 1
+
+    total_jobs = len(site_jobs)
+    completed_jobs = by_status.get("completed", 0)
+    return {
+        "project_id": project_id,
+        "site_id": site_id,
+        "filtered_status": status,
+        "total_jobs": total_jobs,
+        "completed_jobs": completed_jobs,
+        "completion_rate": (completed_jobs / total_jobs) if total_jobs else 0.0,
+        "by_status": by_status,
+    }
+
+
 @app.get("/v1/projects/{project_id}/simulations/timeline/summary")
 def get_project_timeline_summary(project_id: str, status: str | None = None) -> dict:
     """!Return aggregate timeline metrics (avg/p95) for project simulations."""
