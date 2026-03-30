@@ -38,6 +38,7 @@ METRICS: dict[str, int] = {
 OUTBOUND_WEBHOOK_URL = os.getenv("OUTBOUND_WEBHOOK_URL", "").strip()
 OUTBOUND_WEBHOOK_TOKEN = os.getenv("OUTBOUND_WEBHOOK_TOKEN", "").strip()
 WRITE_API_TOKEN = os.getenv("WRITE_API_TOKEN", "").strip()
+OPERATION_IDEMPOTENCY_TTL_SECONDS = int(os.getenv("OPERATION_IDEMPOTENCY_TTL_SECONDS", "86400"))
 
 
 def _load_state() -> None:
@@ -137,6 +138,26 @@ def _parse_iso8601_utc(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _prune_operation_idempotency() -> None:
+    """!Drop expired operation-idempotency entries based on TTL."""
+    if OPERATION_IDEMPOTENCY_TTL_SECONDS <= 0:
+        OPERATION_IDEMPOTENCY.clear()
+        return
+
+    now = datetime.now(timezone.utc)
+    expired: list[str] = []
+    for key, entry in OPERATION_IDEMPOTENCY.items():
+        created_at = _parse_iso8601_utc(entry.get("created_at"))
+        if created_at is None:
+            expired.append(key)
+            continue
+        age = (now - created_at).total_seconds()
+        if age > OPERATION_IDEMPOTENCY_TTL_SECONDS:
+            expired.append(key)
+    for key in expired:
+        OPERATION_IDEMPOTENCY.pop(key, None)
 
 
 _load_state()
@@ -557,9 +578,10 @@ def trigger_project_simulations_batch(
     """!Queue simulations for selected project sites with shared batch parameters."""
     _require_write_token(x_api_token)
     with LOCK:
+        _prune_operation_idempotency()
         if x_idempotency_key and x_idempotency_key in OPERATION_IDEMPOTENCY:
-            replay = OPERATION_IDEMPOTENCY[x_idempotency_key]
-            return {**replay, "idempotent_replay": True}
+            replay_entry = OPERATION_IDEMPOTENCY[x_idempotency_key]
+            return {**replay_entry["response"], "idempotent_replay": True}
         if project_id not in PROJECTS:
             raise HTTPException(status_code=404, detail="project not found")
         sites = [s for s in SITES.values() if s["project_id"] == project_id]
@@ -602,7 +624,10 @@ def trigger_project_simulations_batch(
     response = {"project_id": project_id, "queued_jobs": len(created), "job_ids": created}
     if x_idempotency_key:
         with LOCK:
-            OPERATION_IDEMPOTENCY[x_idempotency_key] = response
+            OPERATION_IDEMPOTENCY[x_idempotency_key] = {
+                "response": response,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
             _persist_state()
     return response
 
