@@ -781,6 +781,54 @@ def get_simulation(job_id: str) -> dict:
     }
 
 
+@app.get("/v1/simulations/{job_id}/lineage")
+def get_simulation_lineage(job_id: str) -> dict:
+    """!Return retry lineage (root, parent chain, and child jobs) for a simulation."""
+    with LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+
+        # Walk parent chain to root.
+        chain = []
+        cursor = job
+        seen: set[str] = set()
+        while cursor:
+            cid = cursor["job_id"]
+            if cid in seen:
+                break
+            seen.add(cid)
+            chain.append(
+                {
+                    "job_id": cid,
+                    "status": cursor.get("status"),
+                    "retry_of": cursor.get("retry_of"),
+                    "submitted_at": cursor.get("submitted_at"),
+                }
+            )
+            parent_id = cursor.get("retry_of")
+            cursor = JOBS.get(parent_id) if parent_id else None
+
+        root_id = chain[-1]["job_id"] if chain else job_id
+        children = [
+            {
+                "job_id": candidate["job_id"],
+                "status": candidate.get("status"),
+                "retry_of": candidate.get("retry_of"),
+                "submitted_at": candidate.get("submitted_at"),
+            }
+            for candidate in JOBS.values()
+            if candidate.get("retry_of") == job_id
+        ]
+
+    return {
+        "job_id": job_id,
+        "root_job_id": root_id,
+        "lineage_chain": chain,
+        "children": children,
+    }
+
+
 @app.post("/v1/simulations/{job_id}/retry")
 def retry_simulation(job_id: str, payload: RetrySimulationRequest) -> dict:
     """!Retry an existing simulation by re-queueing a new child job."""
