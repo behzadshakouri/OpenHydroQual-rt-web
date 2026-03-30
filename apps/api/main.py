@@ -1011,6 +1011,61 @@ def list_project_failures(project_id: str, include_cancelled: bool = True, limit
         "failures": sliced,
     }
 
+
+@app.get("/v1/projects/{project_id}/simulations/queue")
+def list_project_queue(
+    project_id: str,
+    include_running: bool = True,
+    stale_after_seconds: int = 900,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    """!List queued/running simulations with age and stale indicators."""
+    if limit < 1 or offset < 0:
+        raise HTTPException(status_code=400, detail="limit must be >= 1 and offset must be >= 0")
+    if stale_after_seconds < 1:
+        raise HTTPException(status_code=400, detail="stale_after_seconds must be >= 1")
+
+    statuses = {"queued"}
+    if include_running:
+        statuses.add("running")
+
+    now = datetime.now(timezone.utc)
+    with LOCK:
+        if project_id not in PROJECTS:
+            raise HTTPException(status_code=404, detail="project not found")
+        rows = []
+        for job in JOBS.values():
+            if job.get("payload", {}).get("project_id") != project_id:
+                continue
+            status = job.get("status")
+            if status not in statuses:
+                continue
+            submitted_dt = _parse_iso8601_utc(job.get("submitted_at"))
+            age_seconds = int((now - submitted_dt).total_seconds()) if submitted_dt else None
+            rows.append(
+                {
+                    "job_id": job.get("job_id"),
+                    "site_id": job.get("payload", {}).get("site_id"),
+                    "status": status,
+                    "submitted_at": job.get("submitted_at"),
+                    "started_at": job.get("started_at"),
+                    "age_seconds": age_seconds,
+                    "is_stale": (age_seconds is not None and age_seconds >= stale_after_seconds),
+                }
+            )
+
+    rows = sorted(rows, key=lambda row: row.get("submitted_at") or "")
+    sliced = rows[offset: offset + limit]
+    return {
+        "project_id": project_id,
+        "include_running": include_running,
+        "stale_after_seconds": stale_after_seconds,
+        "count": len(rows),
+        "returned": len(sliced),
+        "jobs": sliced,
+    }
+
 @app.get("/v1/simulations/{job_id}")
 def get_simulation(job_id: str) -> dict:
     """!Get job lifecycle metadata."""
