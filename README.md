@@ -55,6 +55,7 @@ the next sections describe what to build next.
   - `POST /v1/simulations/{job_id}/fail`
   - `GET /v1/simulations/{job_id}`
   - `GET /v1/simulations/{job_id}/events`
+  - `GET /v1/simulations/{job_id}/events/poll` (long-poll updates after known event index)
   - `GET /v1/simulations/{job_id}/results`
   - `POST /v1/internal/simulations/{job_id}/result` (worker callback)
   - `GET /metrics` (Prometheus-style counters)
@@ -130,6 +131,7 @@ Minimum environment variables in AWS:
 ### Send/receive flow with AWS services
 - **Receive from AWS worker:** API accepts worker callbacks at `POST /v1/internal/simulations/{job_id}/result`.
 - **Send to AWS/web clients:** set `OUTBOUND_WEBHOOK_URL` to push job lifecycle events (`queued`, `started`, `completed`, `failed`, etc.) to an AWS endpoint (API Gateway, Lambda URL, EventBridge Pipe target, or your own webhook service).
+- **Receive in web clients:** call `GET /v1/simulations/{job_id}/events/poll?after_index=<n>&timeout_s=15` for long-poll incremental updates.
 - Optional auth header for outbound events: set `OUTBOUND_WEBHOOK_TOKEN` (sent as `Authorization: Bearer <token>`).
 
 Example (Lambda Function URL or API Gateway webhook target):

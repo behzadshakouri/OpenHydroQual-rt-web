@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 from threading import Lock
+import time
 from typing import Literal
 from urllib import request as urlrequest
 from urllib.error import URLError
@@ -722,6 +723,62 @@ def get_simulation_events(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="job not found")
     events = job.get("events", [])
     return {"job_id": job_id, "count": len(events), "events": events}
+
+
+@app.get("/v1/simulations/{job_id}/events/poll")
+def poll_simulation_events(job_id: str, after_index: int = 0, timeout_s: float = 15.0) -> dict:
+    """!Long-poll for new simulation events after a known index."""
+    if after_index < 0:
+        raise HTTPException(status_code=400, detail="after_index must be >= 0")
+    if timeout_s < 0 or timeout_s > 30:
+        raise HTTPException(status_code=400, detail="timeout_s must be between 0 and 30 seconds")
+
+    deadline = time.monotonic() + timeout_s
+    final_states = {"completed", "failed", "cancelled"}
+
+    while True:
+        with LOCK:
+            job = JOBS.get(job_id)
+            if not job:
+                raise HTTPException(status_code=404, detail="job not found")
+            events = job.get("events", [])
+            status = job.get("status", "unknown")
+            next_index = len(events)
+
+            if after_index < next_index:
+                return {
+                    "job_id": job_id,
+                    "status": status,
+                    "from_index": after_index,
+                    "next_index": next_index,
+                    "count": next_index - after_index,
+                    "events": events[after_index:],
+                    "timed_out": False,
+                }
+
+            if status in final_states:
+                return {
+                    "job_id": job_id,
+                    "status": status,
+                    "from_index": after_index,
+                    "next_index": next_index,
+                    "count": 0,
+                    "events": [],
+                    "timed_out": False,
+                }
+
+        if time.monotonic() >= deadline:
+            return {
+                "job_id": job_id,
+                "status": status,
+                "from_index": after_index,
+                "next_index": next_index,
+                "count": 0,
+                "events": [],
+                "timed_out": True,
+            }
+
+        time.sleep(0.25)
 
 @app.get("/v1/simulations/{job_id}/results")
 def get_simulation_results(job_id: str) -> dict:
