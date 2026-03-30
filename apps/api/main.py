@@ -211,6 +211,11 @@ class BatchSimulateRequest(BaseModel):
         return self
 
 
+class RetrySimulationRequest(BaseModel):
+    """!Payload for retrying a prior simulation job."""
+    force: bool = False
+
+
 @app.get("/health")
 def health() -> dict:
     """!Return a lightweight health payload."""
@@ -751,6 +756,43 @@ def get_simulation(job_id: str) -> dict:
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "events": job.get("events", []),
+        "retry_of": job.get("retry_of"),
+    }
+
+
+@app.post("/v1/simulations/{job_id}/retry")
+def retry_simulation(job_id: str, payload: RetrySimulationRequest) -> dict:
+    """!Retry an existing simulation by re-queueing a new child job."""
+    with LOCK:
+        original = JOBS.get(job_id)
+        if not original:
+            raise HTTPException(status_code=404, detail="job not found")
+
+        original_status = original.get("status")
+        if original_status in {"queued", "running"} and not payload.force:
+            raise HTTPException(
+                status_code=409,
+                detail="job is still active; set force=true to retry anyway",
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        retry_payload = dict(original.get("payload", {}))
+        new_job_id = _create_queued_job(retry_payload, now)
+        JOBS[new_job_id]["retry_of"] = job_id
+        original.setdefault("events", []).append({"at": now, "status": "retried", "new_job_id": new_job_id})
+        _persist_state()
+
+    _notify_external(
+        "job.retried",
+        new_job_id,
+        "queued",
+        payload={"retry_of": job_id, "original_status": original_status},
+    )
+    return {
+        "job_id": new_job_id,
+        "status": "queued",
+        "retry_of": job_id,
+        "original_status": original_status,
     }
 
 
