@@ -138,6 +138,7 @@ Minimum environment variables in AWS:
 ```bash
 cd openhydroqual-rt-web
 make install
+make test-fast   # quick worker+adapter feedback loop
 make test
 ```
 

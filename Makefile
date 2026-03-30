@@ -1,4 +1,4 @@
-.PHONY: venv install test test-api test-worker
+.PHONY: venv install test test-fast test-api test-worker
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -20,6 +20,9 @@ install: $(DEPS_STAMP)
 
 test: $(DEPS_STAMP)
 	$(PYTEST) -q tests
+
+test-fast: $(DEPS_STAMP)
+	$(PYTEST) -q tests/test_ohquery_adapter.py tests/test_worker_task.py
 
 test-api: $(DEPS_STAMP)
 	$(PYTEST) -q tests/test_api_contract.py
