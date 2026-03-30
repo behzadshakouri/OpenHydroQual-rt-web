@@ -36,6 +36,7 @@ METRICS: dict[str, int] = {
 }
 OUTBOUND_WEBHOOK_URL = os.getenv("OUTBOUND_WEBHOOK_URL", "").strip()
 OUTBOUND_WEBHOOK_TOKEN = os.getenv("OUTBOUND_WEBHOOK_TOKEN", "").strip()
+WRITE_API_TOKEN = os.getenv("WRITE_API_TOKEN", "").strip()
 
 
 def _load_state() -> None:
@@ -117,6 +118,12 @@ def _ensure_transition_allowed(current_status: str, new_status: str) -> None:
             status_code=409,
             detail=f"invalid status transition from {current_status} to {new_status}",
         )
+
+
+def _require_write_token(x_api_token: str | None) -> None:
+    """!Enforce optional shared token for mutating API endpoints."""
+    if WRITE_API_TOKEN and x_api_token != WRITE_API_TOKEN:
+        raise HTTPException(status_code=403, detail="forbidden")
 
 
 def _parse_iso8601_utc(value: str | None) -> datetime | None:
@@ -273,8 +280,9 @@ def metrics() -> Response:
     return Response(content=body, media_type="text/plain; version=0.0.4")
 
 @app.post("/v1/projects")
-def create_project(payload: ProjectCreate) -> dict:
+def create_project(payload: ProjectCreate, x_api_token: str | None = Header(default=None)) -> dict:
     """!Create a project resource."""
+    _require_write_token(x_api_token)
     with LOCK:
         if payload.project_id in PROJECTS:
             raise HTTPException(status_code=409, detail="project already exists")
@@ -285,8 +293,9 @@ def create_project(payload: ProjectCreate) -> dict:
 
 
 @app.post("/v1/projects/import")
-def import_project(payload: ProjectImportRequest) -> dict:
+def import_project(payload: ProjectImportRequest, x_api_token: str | None = Header(default=None)) -> dict:
     """!Import project, site, and job records."""
+    _require_write_token(x_api_token)
     project_id = payload.project.get("project_id")
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required in payload.project")
@@ -345,8 +354,9 @@ def export_project(project_id: str, include_jobs: bool = False) -> dict:
         return payload
 
 @app.post("/v1/projects/{project_id}/clone")
-def clone_project(project_id: str, payload: ProjectCloneRequest) -> dict:
+def clone_project(project_id: str, payload: ProjectCloneRequest, x_api_token: str | None = Header(default=None)) -> dict:
     """!Clone project metadata and sites."""
+    _require_write_token(x_api_token)
     with LOCK:
         if project_id not in PROJECTS:
             raise HTTPException(status_code=404, detail="project not found")
@@ -366,8 +376,9 @@ def clone_project(project_id: str, payload: ProjectCloneRequest) -> dict:
     return {"project_id": payload.new_project_id, "sites_copied": copied_sites}
 
 @app.delete("/v1/projects/{project_id}")
-def delete_project(project_id: str, force: bool = False) -> dict:
+def delete_project(project_id: str, force: bool = False, x_api_token: str | None = Header(default=None)) -> dict:
     """!Delete a project and optional dependencies."""
+    _require_write_token(x_api_token)
     with LOCK:
         if project_id not in PROJECTS:
             raise HTTPException(status_code=404, detail="project not found")
@@ -388,8 +399,9 @@ def delete_project(project_id: str, force: bool = False) -> dict:
     return {"project_id": project_id, "deleted": True, "sites_removed": len(related_sites), "jobs_removed": len(related_jobs)}
 
 @app.post("/v1/projects/{project_id}/sites")
-def create_project_site(project_id: str, payload: SiteCreate) -> dict:
+def create_project_site(project_id: str, payload: SiteCreate, x_api_token: str | None = Header(default=None)) -> dict:
     """!Create a site under a project."""
+    _require_write_token(x_api_token)
     with LOCK:
         if project_id not in PROJECTS:
             raise HTTPException(status_code=404, detail="project not found")
@@ -406,8 +418,9 @@ def create_project_site(project_id: str, payload: SiteCreate) -> dict:
 
 
 @app.delete("/v1/projects/{project_id}/sites/{site_id}")
-def delete_project_site(project_id: str, site_id: str, force: bool = False) -> dict:
+def delete_project_site(project_id: str, site_id: str, force: bool = False, x_api_token: str | None = Header(default=None)) -> dict:
     """!Delete a project site and optional dependent jobs."""
+    _require_write_token(x_api_token)
     key = f"{project_id}:{site_id}"
     with LOCK:
         if project_id not in PROJECTS:
@@ -479,8 +492,9 @@ def _create_queued_job(payload: dict, submitted_at: str) -> str:
     return job_id
 
 @app.post("/v1/projects/{project_id}/simulate")
-def trigger_project_simulations(project_id: str) -> dict:
+def trigger_project_simulations(project_id: str, x_api_token: str | None = Header(default=None)) -> dict:
     """!Queue simulations for all project sites."""
+    _require_write_token(x_api_token)
     with LOCK:
         if project_id not in PROJECTS:
             raise HTTPException(status_code=404, detail="project not found")
@@ -514,8 +528,9 @@ def trigger_project_simulations(project_id: str) -> dict:
 
 
 @app.post("/v1/projects/{project_id}/simulate/batch")
-def trigger_project_simulations_batch(project_id: str, payload: BatchSimulateRequest) -> dict:
+def trigger_project_simulations_batch(project_id: str, payload: BatchSimulateRequest, x_api_token: str | None = Header(default=None)) -> dict:
     """!Queue simulations for selected project sites with shared batch parameters."""
+    _require_write_token(x_api_token)
     with LOCK:
         if project_id not in PROJECTS:
             raise HTTPException(status_code=404, detail="project not found")
@@ -562,8 +577,10 @@ def trigger_project_simulations_batch(project_id: str, payload: BatchSimulateReq
 def create_simulation(
     payload: SimulationRequest,
     x_idempotency_key: str | None = Header(default=None),
+    x_api_token: str | None = Header(default=None),
 ) -> dict:
     """!Create and enqueue a simulation job."""
+    _require_write_token(x_api_token)
     now = datetime.now(timezone.utc).isoformat()
 
     with LOCK:
@@ -606,8 +623,9 @@ def create_simulation(
 
 
 @app.post("/v1/simulations/{job_id}/start")
-def mark_started(job_id: str) -> dict:
+def mark_started(job_id: str, x_api_token: str | None = Header(default=None)) -> dict:
     """!Mark a job as running."""
+    _require_write_token(x_api_token)
     now = datetime.now(timezone.utc).isoformat()
     with LOCK:
         job = JOBS.get(job_id)
@@ -623,8 +641,9 @@ def mark_started(job_id: str) -> dict:
 
 
 @app.post("/v1/simulations/{job_id}/complete")
-def mark_completed(job_id: str, result: CompletionPayload) -> dict:
+def mark_completed(job_id: str, result: CompletionPayload, x_api_token: str | None = Header(default=None)) -> dict:
     """!Mark a job as completed with result payload."""
+    _require_write_token(x_api_token)
     now = datetime.now(timezone.utc).isoformat()
     with LOCK:
         job = JOBS.get(job_id)
@@ -654,8 +673,9 @@ def mark_completed(job_id: str, result: CompletionPayload) -> dict:
 
 
 @app.post("/v1/simulations/{job_id}/cancel")
-def cancel_simulation(job_id: str, reason: str | None = None) -> dict:
+def cancel_simulation(job_id: str, reason: str | None = None, x_api_token: str | None = Header(default=None)) -> dict:
     """!Cancel a job and record cancellation reason."""
+    _require_write_token(x_api_token)
     now = datetime.now(timezone.utc).isoformat()
     with LOCK:
         job = JOBS.get(job_id)
@@ -672,8 +692,9 @@ def cancel_simulation(job_id: str, reason: str | None = None) -> dict:
     return {"job_id": job_id, "status": "cancelled"}
 
 @app.post("/v1/simulations/{job_id}/fail")
-def mark_failed(job_id: str, error_message: str | None = None) -> dict:
+def mark_failed(job_id: str, error_message: str | None = None, x_api_token: str | None = Header(default=None)) -> dict:
     """!Mark a job as failed with error details."""
+    _require_write_token(x_api_token)
     now = datetime.now(timezone.utc).isoformat()
     with LOCK:
         job = JOBS.get(job_id)
@@ -951,8 +972,9 @@ def get_simulation_timeline(job_id: str) -> dict:
 
 
 @app.post("/v1/simulations/{job_id}/retry")
-def retry_simulation(job_id: str, payload: RetrySimulationRequest) -> dict:
+def retry_simulation(job_id: str, payload: RetrySimulationRequest, x_api_token: str | None = Header(default=None)) -> dict:
     """!Retry an existing simulation by re-queueing a new child job."""
+    _require_write_token(x_api_token)
     with LOCK:
         original = JOBS.get(job_id)
         if not original:
@@ -987,8 +1009,9 @@ def retry_simulation(job_id: str, payload: RetrySimulationRequest) -> dict:
 
 
 @app.post("/v1/projects/{project_id}/simulations/retry-failed")
-def retry_project_simulations(project_id: str, payload: BulkRetryRequest) -> dict:
+def retry_project_simulations(project_id: str, payload: BulkRetryRequest, x_api_token: str | None = Header(default=None)) -> dict:
     """!Bulk retry simulations for a project by matching statuses."""
+    _require_write_token(x_api_token)
     with LOCK:
         if project_id not in PROJECTS:
             raise HTTPException(status_code=404, detail="project not found")
