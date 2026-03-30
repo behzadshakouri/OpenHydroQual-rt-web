@@ -774,6 +774,67 @@ def get_project_simulations_summary(project_id: str, status: str | None = None) 
         "by_site": by_site,
     }
 
+
+@app.get("/v1/projects/{project_id}/simulations/timeline/summary")
+def get_project_timeline_summary(project_id: str, status: str | None = None) -> dict:
+    """!Return aggregate timeline metrics (avg/p95) for project simulations."""
+    with LOCK:
+        if project_id not in PROJECTS:
+            raise HTTPException(status_code=404, detail="project not found")
+        jobs = [j for j in JOBS.values() if j.get("payload", {}).get("project_id") == project_id]
+        if status is not None:
+            jobs = [j for j in jobs if j.get("status") == status]
+
+    queue_values: list[float] = []
+    run_values: list[float] = []
+    total_values: list[float] = []
+    by_site_total: dict[str, list[float]] = {}
+
+    for job in jobs:
+        site_id = job.get("payload", {}).get("site_id", "unknown")
+        submitted_dt = _parse_iso8601_utc(job.get("submitted_at"))
+        started_dt = _parse_iso8601_utc(job.get("started_at"))
+        finished_dt = _parse_iso8601_utc(job.get("finished_at"))
+
+        if submitted_dt and started_dt:
+            queue_values.append(max((started_dt - submitted_dt).total_seconds(), 0.0))
+        if started_dt and finished_dt:
+            run_values.append(max((finished_dt - started_dt).total_seconds(), 0.0))
+        if submitted_dt and finished_dt:
+            total_seconds = max((finished_dt - submitted_dt).total_seconds(), 0.0)
+            total_values.append(total_seconds)
+            by_site_total.setdefault(site_id, []).append(total_seconds)
+
+    def _avg(values: list[float]) -> float | None:
+        return (sum(values) / len(values)) if values else None
+
+    def _p95(values: list[float]) -> float | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        idx = max(int(round(0.95 * len(ordered))) - 1, 0)
+        return ordered[min(idx, len(ordered) - 1)]
+
+    by_site = {
+        site_id: {
+            "count": len(values),
+            "avg_total_seconds": _avg(values),
+            "p95_total_seconds": _p95(values),
+        }
+        for site_id, values in by_site_total.items()
+    }
+
+    return {
+        "project_id": project_id,
+        "filtered_status": status,
+        "total_jobs": len(jobs),
+        "avg_queue_seconds": _avg(queue_values),
+        "avg_run_seconds": _avg(run_values),
+        "avg_total_seconds": _avg(total_values),
+        "p95_total_seconds": _p95(total_values),
+        "by_site": by_site,
+    }
+
 @app.get("/v1/simulations/{job_id}")
 def get_simulation(job_id: str) -> dict:
     """!Get job lifecycle metadata."""
