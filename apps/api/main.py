@@ -21,6 +21,7 @@ app = FastAPI(title="OHQ Real-time API", version="0.2.0")
 
 JOBS: dict[str, dict] = {}
 IDEMPOTENCY_INDEX: dict[str, str] = {}
+OPERATION_IDEMPOTENCY: dict[str, dict] = {}
 LOCK = Lock()
 PROJECTS: dict[str, dict] = {}
 SITES: dict[str, dict] = {}
@@ -47,6 +48,7 @@ def _load_state() -> None:
         payload = json.loads(STATE_FILE.read_text())
         JOBS.update(payload.get("jobs", {}))
         IDEMPOTENCY_INDEX.update(payload.get("idempotency_index", {}))
+        OPERATION_IDEMPOTENCY.update(payload.get("operation_idempotency", {}))
         PROJECTS.update(payload.get("projects", {}))
         SITES.update(payload.get("sites", {}))
     except (OSError, json.JSONDecodeError):
@@ -63,6 +65,7 @@ def _persist_state() -> None:
             {
                 "jobs": JOBS,
                 "idempotency_index": IDEMPOTENCY_INDEX,
+                "operation_idempotency": OPERATION_IDEMPOTENCY,
                 "projects": PROJECTS,
                 "sites": SITES,
             }
@@ -545,10 +548,18 @@ def trigger_project_simulations(project_id: str, x_api_token: str | None = Heade
 
 
 @app.post("/v1/projects/{project_id}/simulate/batch")
-def trigger_project_simulations_batch(project_id: str, payload: BatchSimulateRequest, x_api_token: str | None = Header(default=None)) -> dict:
+def trigger_project_simulations_batch(
+    project_id: str,
+    payload: BatchSimulateRequest,
+    x_api_token: str | None = Header(default=None),
+    x_idempotency_key: str | None = Header(default=None),
+) -> dict:
     """!Queue simulations for selected project sites with shared batch parameters."""
     _require_write_token(x_api_token)
     with LOCK:
+        if x_idempotency_key and x_idempotency_key in OPERATION_IDEMPOTENCY:
+            replay = OPERATION_IDEMPOTENCY[x_idempotency_key]
+            return {**replay, "idempotent_replay": True}
         if project_id not in PROJECTS:
             raise HTTPException(status_code=404, detail="project not found")
         sites = [s for s in SITES.values() if s["project_id"] == project_id]
@@ -588,7 +599,12 @@ def trigger_project_simulations_batch(project_id: str, payload: BatchSimulateReq
             JOBS[job_id]["queue_task_id"] = task_id
         created.append(job_id)
 
-    return {"project_id": project_id, "queued_jobs": len(created), "job_ids": created}
+    response = {"project_id": project_id, "queued_jobs": len(created), "job_ids": created}
+    if x_idempotency_key:
+        with LOCK:
+            OPERATION_IDEMPOTENCY[x_idempotency_key] = response
+            _persist_state()
+    return response
 
 @app.post("/v1/simulations")
 def create_simulation(

@@ -69,6 +69,7 @@ the next sections describe what to build next.
   - `POST /v1/internal/simulations/{job_id}/result` (worker callback)
   - `GET /metrics` (Prometheus-style counters)
 - Idempotency support via `X-Idempotency-Key` header on create endpoint
+- `POST /v1/projects/{project_id}/simulate/batch` also supports `X-Idempotency-Key` to replay prior batch responses.
 - `POST /v1/simulations` validates project/site existence and facility type match
 - Celery worker stub for queued simulation runs
 - JSON Schemas for request/result contracts (`simulation_request.v1`, `simulation_result.v1`)

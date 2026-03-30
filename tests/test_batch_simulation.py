@@ -4,6 +4,7 @@ from fastapi import HTTPException
 
 from apps.api.main import (
     JOBS,
+    OPERATION_IDEMPOTENCY,
     PROJECTS,
     SITES,
     BatchSimulateRequest,
@@ -16,6 +17,7 @@ def _seed_project_with_sites(project_id: str, site_ids: list[str]) -> None:
     PROJECTS.clear()
     SITES.clear()
     JOBS.clear()
+    OPERATION_IDEMPOTENCY.clear()
     PROJECTS[project_id] = {"project_id": project_id, "name": "Demo"}
     for site_id in site_ids:
         SITES[f"{project_id}:{site_id}"] = {
@@ -64,3 +66,23 @@ def test_batch_simulation_rejects_over_max_jobs() -> None:
         assert "max_jobs" in str(exc.detail)
     else:
         raise AssertionError("Expected HTTPException for max_jobs overflow")
+
+
+def test_batch_simulation_idempotency_replays_response() -> None:
+    """!Batch endpoint should replay response for repeated idempotency key."""
+    _seed_project_with_sites("p4", ["s1", "s2"])
+
+    first = trigger_project_simulations_batch(
+        "p4",
+        BatchSimulateRequest(site_ids=["s1"], max_jobs=5),
+        x_idempotency_key="batch-key-1",
+    )
+    second = trigger_project_simulations_batch(
+        "p4",
+        BatchSimulateRequest(site_ids=["s2"], max_jobs=5),
+        x_idempotency_key="batch-key-1",
+    )
+
+    assert first["queued_jobs"] == 1
+    assert second["idempotent_replay"] is True
+    assert second["job_ids"] == first["job_ids"]
