@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from threading import Lock
 from typing import Literal
+from urllib import request as urlrequest
+from urllib.error import URLError
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Response
@@ -31,6 +33,8 @@ METRICS: dict[str, int] = {
     "jobs_failed_total": 0,
     "jobs_cancelled_total": 0,
 }
+OUTBOUND_WEBHOOK_URL = os.getenv("OUTBOUND_WEBHOOK_URL", "").strip()
+OUTBOUND_WEBHOOK_TOKEN = os.getenv("OUTBOUND_WEBHOOK_TOKEN", "").strip()
 
 
 def _load_state() -> None:
@@ -62,6 +66,38 @@ def _persist_state() -> None:
             }
         )
     )
+
+
+def _notify_external(event_type: str, job_id: str, status: str, payload: dict | None = None) -> bool:
+    """!Best-effort outbound event notification for AWS/webhook integrations."""
+    if not OUTBOUND_WEBHOOK_URL:
+        return False
+
+    body = {
+        "source": "openhydroqual-rt-api",
+        "event_type": event_type,
+        "job_id": job_id,
+        "status": status,
+        "sent_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    if payload:
+        body["payload"] = payload
+
+    headers = {"Content-Type": "application/json"}
+    if OUTBOUND_WEBHOOK_TOKEN:
+        headers["Authorization"] = f"Bearer {OUTBOUND_WEBHOOK_TOKEN}"
+
+    req = urlrequest.Request(
+        OUTBOUND_WEBHOOK_URL,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=3):  # nosec B310 - controlled integration URL
+            return True
+    except (URLError, TimeoutError, OSError):
+        return False
 
 
 _load_state()
@@ -390,6 +426,7 @@ def _create_queued_job(payload: dict, submitted_at: str) -> str:
     }
     METRICS["jobs_created_total"] += 1
     _persist_state()
+    _notify_external("job.queued", job_id, "queued", payload={"project_id": payload.get("project_id"), "site_id": payload.get("site_id")})
     return job_id
 
 @app.post("/v1/projects/{project_id}/simulate")
@@ -531,6 +568,7 @@ def mark_started(job_id: str) -> dict:
         job["started_at"] = now
         job["events"].append({"at": now, "status": "running"})
         _persist_state()
+    _notify_external("job.started", job_id, "running")
     return {"job_id": job_id, "status": "running"}
 
 
@@ -560,6 +598,7 @@ def mark_completed(job_id: str, result: CompletionPayload) -> dict:
         }
         METRICS["jobs_completed_total"] += 1
         _persist_state()
+    _notify_external("job.completed", job_id, "completed", payload={"result_contract": "simulation_result.v1"})
     return {"job_id": job_id, "status": "completed"}
 
 
@@ -579,6 +618,7 @@ def cancel_simulation(job_id: str, reason: str | None = None) -> dict:
         job["events"].append({"at": now, "status": "cancelled"})
         METRICS["jobs_cancelled_total"] += 1
         _persist_state()
+    _notify_external("job.cancelled", job_id, "cancelled", payload={"reason": reason or "cancelled by user"})
     return {"job_id": job_id, "status": "cancelled"}
 
 @app.post("/v1/simulations/{job_id}/fail")
@@ -595,6 +635,7 @@ def mark_failed(job_id: str, error_message: str | None = None) -> dict:
         job["events"].append({"at": now, "status": "failed"})
         METRICS["jobs_failed_total"] += 1
         _persist_state()
+    _notify_external("job.failed", job_id, "failed", payload={"error_message": error_message or "unknown error"})
     return {"job_id": job_id, "status": "failed"}
 
 @app.post("/v1/internal/simulations/{job_id}/result")
@@ -625,6 +666,12 @@ def post_worker_result(job_id: str, payload: WorkerResultPayload, x_internal_tok
         elif payload.status == "failed":
             METRICS["jobs_failed_total"] += 1
         _persist_state()
+    _notify_external(
+        "job.worker_result",
+        job_id,
+        payload.status,
+        payload={"result_contract": payload.result_contract, "engine": payload.adapter.engine},
+    )
     return {"job_id": job_id, "status": payload.status}
 
 @app.get("/v1/projects/{project_id}/simulations")

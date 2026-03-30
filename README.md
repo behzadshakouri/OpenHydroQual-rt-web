@@ -127,6 +127,16 @@ Minimum environment variables in AWS:
 - `RESULT_BACKEND` (ElastiCache endpoint)
 - `OHQUERY_BASE_URL` (internal OHQuery service URL)
 
+### Send/receive flow with AWS services
+- **Receive from AWS worker:** API accepts worker callbacks at `POST /v1/internal/simulations/{job_id}/result`.
+- **Send to AWS/web clients:** set `OUTBOUND_WEBHOOK_URL` to push job lifecycle events (`queued`, `started`, `completed`, `failed`, etc.) to an AWS endpoint (API Gateway, Lambda URL, EventBridge Pipe target, or your own webhook service).
+- Optional auth header for outbound events: set `OUTBOUND_WEBHOOK_TOKEN` (sent as `Authorization: Bearer <token>`).
+
+Example (Lambda Function URL or API Gateway webhook target):
+```bash
+export OUTBOUND_WEBHOOK_URL="https://<aws-endpoint>/job-events"
+export OUTBOUND_WEBHOOK_TOKEN="<shared-secret-token>"
+```
 
 
 ## OHQuery integration mode
