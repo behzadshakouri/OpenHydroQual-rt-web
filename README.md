@@ -49,6 +49,7 @@ the next sections describe what to build next.
   - `POST /v1/projects/{project_id}/simulate/batch` (queue selected project sites with shared params)
   - `GET /v1/projects/{project_id}/stats`
   - `GET /v1/projects/{project_id}/simulations` (supports `status`, `limit`, `offset`)
+  - `GET /v1/projects/{project_id}/simulations/summary` (aggregated status/site counts for dashboards)
   - `POST /v1/simulations/{job_id}/start`
   - `POST /v1/simulations/{job_id}/complete`
   - `POST /v1/simulations/{job_id}/cancel`

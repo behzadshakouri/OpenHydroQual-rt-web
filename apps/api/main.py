@@ -699,6 +699,45 @@ def list_project_simulations(project_id: str, status: str | None = None, limit: 
     sliced = jobs[offset: offset + limit]
     return {"project_id": project_id, "count": len(jobs), "returned": len(sliced), "jobs": sliced}
 
+
+@app.get("/v1/projects/{project_id}/simulations/summary")
+def get_project_simulations_summary(project_id: str, status: str | None = None) -> dict:
+    """!Return aggregate simulation summary for dashboard usage."""
+    with LOCK:
+        if project_id not in PROJECTS:
+            raise HTTPException(status_code=404, detail="project not found")
+
+        project_jobs = [
+            job for job in JOBS.values() if job.get("payload", {}).get("project_id") == project_id
+        ]
+        if status is not None:
+            project_jobs = [job for job in project_jobs if job.get("status") == status]
+
+    by_status: dict[str, int] = {}
+    by_site: dict[str, dict[str, int]] = {}
+    for job in project_jobs:
+        job_status = job.get("status", "unknown")
+        site_id = job.get("payload", {}).get("site_id", "unknown")
+        by_status[job_status] = by_status.get(job_status, 0) + 1
+        if site_id not in by_site:
+            by_site[site_id] = {"total": 0}
+        by_site[site_id]["total"] += 1
+        by_site[site_id][job_status] = by_site[site_id].get(job_status, 0) + 1
+
+    total_jobs = len(project_jobs)
+    completed_jobs = by_status.get("completed", 0)
+    completion_rate = (completed_jobs / total_jobs) if total_jobs else 0.0
+
+    return {
+        "project_id": project_id,
+        "filtered_status": status,
+        "total_jobs": total_jobs,
+        "completed_jobs": completed_jobs,
+        "completion_rate": completion_rate,
+        "by_status": by_status,
+        "by_site": by_site,
+    }
+
 @app.get("/v1/simulations/{job_id}")
 def get_simulation(job_id: str) -> dict:
     """!Get job lifecycle metadata."""
