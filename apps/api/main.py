@@ -244,6 +244,21 @@ class RetrySimulationRequest(BaseModel):
     force: bool = False
 
 
+class BulkRetryRequest(BaseModel):
+    """!Payload for bulk retrying project simulations by status."""
+    statuses: list[str] = Field(default_factory=lambda: ["failed"])
+    limit: int = 100
+
+    @model_validator(mode="after")
+    def validate_limit(self) -> "BulkRetryRequest":
+        """!Validate bulk retry request parameters."""
+        if self.limit < 1:
+            raise ValueError("limit must be >= 1")
+        if not self.statuses:
+            raise ValueError("statuses must contain at least one status")
+        return self
+
+
 @app.get("/health")
 def health() -> dict:
     """!Return a lightweight health payload."""
@@ -968,6 +983,50 @@ def retry_simulation(job_id: str, payload: RetrySimulationRequest) -> dict:
         "status": "queued",
         "retry_of": job_id,
         "original_status": original_status,
+    }
+
+
+@app.post("/v1/projects/{project_id}/simulations/retry-failed")
+def retry_project_simulations(project_id: str, payload: BulkRetryRequest) -> dict:
+    """!Bulk retry simulations for a project by matching statuses."""
+    with LOCK:
+        if project_id not in PROJECTS:
+            raise HTTPException(status_code=404, detail="project not found")
+        candidates = [
+            job
+            for job in JOBS.values()
+            if job.get("payload", {}).get("project_id") == project_id and job.get("status") in set(payload.statuses)
+        ]
+
+    candidates = sorted(candidates, key=lambda j: j.get("submitted_at", ""))
+    selected = candidates[: payload.limit]
+    created: list[dict] = []
+    now = datetime.now(timezone.utc).isoformat()
+
+    for original in selected:
+        original_id = original["job_id"]
+        retry_payload = dict(original.get("payload", {}))
+        with LOCK:
+            new_job_id = _create_queued_job(retry_payload, now)
+            JOBS[new_job_id]["retry_of"] = original_id
+            existing = JOBS.get(original_id)
+            if existing is not None:
+                existing.setdefault("events", []).append({"at": now, "status": "retried", "new_job_id": new_job_id})
+            _persist_state()
+        _notify_external(
+            "job.retried",
+            new_job_id,
+            "queued",
+            payload={"retry_of": original_id, "original_status": original.get("status")},
+        )
+        created.append({"job_id": new_job_id, "retry_of": original_id})
+
+    return {
+        "project_id": project_id,
+        "requested_statuses": payload.statuses,
+        "matched_jobs": len(candidates),
+        "retried_jobs": len(created),
+        "retries": created,
     }
 
 
