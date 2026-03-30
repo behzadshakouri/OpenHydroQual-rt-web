@@ -925,6 +925,51 @@ def get_project_timeline_summary(project_id: str, status: str | None = None) -> 
         "by_site": by_site,
     }
 
+
+@app.get("/v1/projects/{project_id}/simulations/failures")
+def list_project_failures(project_id: str, include_cancelled: bool = True, limit: int = 100, offset: int = 0) -> dict:
+    """!List failed/cancelled simulation records with failure metadata."""
+    if limit < 1 or offset < 0:
+        raise HTTPException(status_code=400, detail="limit must be >= 1 and offset must be >= 0")
+
+    with LOCK:
+        if project_id not in PROJECTS:
+            raise HTTPException(status_code=404, detail="project not found")
+        statuses = {"failed"}
+        if include_cancelled:
+            statuses.add("cancelled")
+
+        failures = []
+        for job in JOBS.values():
+            if job.get("payload", {}).get("project_id") != project_id:
+                continue
+            status = job.get("status")
+            if status not in statuses:
+                continue
+            failures.append(
+                {
+                    "job_id": job.get("job_id"),
+                    "site_id": job.get("payload", {}).get("site_id"),
+                    "status": status,
+                    "submitted_at": job.get("submitted_at"),
+                    "finished_at": job.get("finished_at"),
+                    "error_message": job.get("error_message"),
+                    "cancel_reason": job.get("cancel_reason"),
+                    "retry_of": job.get("retry_of"),
+                    "has_retry_child": any(candidate.get("retry_of") == job.get("job_id") for candidate in JOBS.values()),
+                }
+            )
+
+    failures = sorted(failures, key=lambda row: row.get("submitted_at") or "")
+    sliced = failures[offset: offset + limit]
+    return {
+        "project_id": project_id,
+        "include_cancelled": include_cancelled,
+        "count": len(failures),
+        "returned": len(sliced),
+        "failures": sliced,
+    }
+
 @app.get("/v1/simulations/{job_id}")
 def get_simulation(job_id: str) -> dict:
     """!Get job lifecycle metadata."""
