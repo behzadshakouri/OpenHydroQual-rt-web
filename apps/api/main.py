@@ -1,6 +1,6 @@
 """!Scaffold FastAPI API service for OpenHydroQual real-time orchestration."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -156,6 +156,22 @@ class WorkerResultPayload(BaseModel):
     metrics: ResultMetrics
     adapter: AdapterMetadata
     generated_at_utc: datetime | None = None
+
+
+class BatchSimulateRequest(BaseModel):
+    """!Payload for queueing project simulations in bulk."""
+    site_ids: list[str] | None = None
+    time_window: TimeWindow | None = None
+    forcing_ref: RefPayload = Field(default_factory=lambda: RefPayload(dataset_id="scheduled"))
+    parameters_ref: RefPayload = Field(default_factory=lambda: RefPayload(profile_id="default"))
+    max_jobs: int = 1000
+
+    @model_validator(mode="after")
+    def validate_max_jobs(self) -> "BatchSimulateRequest":
+        """!Validate that batch max_jobs is positive."""
+        if self.max_jobs < 1:
+            raise ValueError("max_jobs must be >= 1")
+        return self
 
 
 @app.get("/health")
@@ -361,6 +377,21 @@ def get_project_stats(project_id: str) -> dict:
         "jobs_by_status": by_status,
     }
 
+
+def _create_queued_job(payload: dict, submitted_at: str) -> str:
+    """!Create an in-memory queued job and return its identifier."""
+    job_id = f"sim_{uuid4().hex[:12]}"
+    JOBS[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "submitted_at": submitted_at,
+        "payload": payload,
+        "events": [{"at": submitted_at, "status": "queued"}],
+    }
+    METRICS["jobs_created_total"] += 1
+    _persist_state()
+    return job_id
+
 @app.post("/v1/projects/{project_id}/simulate")
 def trigger_project_simulations(project_id: str) -> dict:
     """!Queue simulations for all project sites."""
@@ -370,34 +401,73 @@ def trigger_project_simulations(project_id: str) -> dict:
         project_sites = [s for s in SITES.values() if s["project_id"] == project_id]
 
     created = []
-    now = datetime.now(timezone.utc).isoformat()
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(hours=1)
+    now = start.isoformat()
     for site in project_sites:
-        job_id = f"sim_{uuid4().hex[:12]}"
         payload = {
             "project_id": project_id,
             "site_id": site["site_id"],
             "facility_type": site["facility_type"],
-            "time_window": {"start_utc": now, "end_utc": now},
+            "time_window": {"start_utc": start.isoformat(), "end_utc": end.isoformat()},
             "forcing_ref": {"dataset_id": "scheduled", "version": now},
             "parameters_ref": {"profile_id": "default"},
             "request_contract": "simulation_request.v1",
         }
 
         with LOCK:
-            JOBS[job_id] = {
-                "job_id": job_id,
-                "status": "queued",
-                "submitted_at": now,
-                "payload": payload,
-                "events": [{"at": now, "status": "queued"}],
-            }
-            METRICS["jobs_created_total"] += 1
-            _persist_state()
+            job_id = _create_queued_job(payload, now)
 
         if os.getenv("ASYNC_EXECUTION", "false").lower() == "true":
             task_id = enqueue_run({"job_id": job_id, "payload": payload})
             JOBS[job_id]["queue_task_id"] = task_id
 
+        created.append(job_id)
+
+    return {"project_id": project_id, "queued_jobs": len(created), "job_ids": created}
+
+
+@app.post("/v1/projects/{project_id}/simulate/batch")
+def trigger_project_simulations_batch(project_id: str, payload: BatchSimulateRequest) -> dict:
+    """!Queue simulations for selected project sites with shared batch parameters."""
+    with LOCK:
+        if project_id not in PROJECTS:
+            raise HTTPException(status_code=404, detail="project not found")
+        sites = [s for s in SITES.values() if s["project_id"] == project_id]
+
+    if payload.site_ids:
+        selected = set(payload.site_ids)
+        sites = [s for s in sites if s["site_id"] in selected]
+    if not sites:
+        raise HTTPException(status_code=400, detail="no matching project sites for batch request")
+    if len(sites) > payload.max_jobs:
+        raise HTTPException(status_code=400, detail=f"batch exceeds max_jobs={payload.max_jobs}")
+
+    window_start = payload.time_window.start_utc if payload.time_window else datetime.now(timezone.utc)
+    window_end = payload.time_window.end_utc if payload.time_window else window_start + timedelta(hours=1)
+    submitted_at = datetime.now(timezone.utc).isoformat()
+
+    created: list[str] = []
+    for site in sites:
+        job_payload = {
+            "project_id": project_id,
+            "site_id": site["site_id"],
+            "facility_type": site["facility_type"],
+            "time_window": {
+                "start_utc": window_start.isoformat(),
+                "end_utc": window_end.isoformat(),
+            },
+            "forcing_ref": payload.forcing_ref.model_dump(exclude_none=True),
+            "parameters_ref": payload.parameters_ref.model_dump(exclude_none=True),
+            "request_contract": "simulation_request.v1",
+        }
+
+        with LOCK:
+            job_id = _create_queued_job(job_payload, submitted_at)
+
+        if os.getenv("ASYNC_EXECUTION", "false").lower() == "true":
+            task_id = enqueue_run({"job_id": job_id, "payload": job_payload})
+            JOBS[job_id]["queue_task_id"] = task_id
         created.append(job_id)
 
     return {"project_id": project_id, "queued_jobs": len(created), "job_ids": created}
