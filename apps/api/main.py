@@ -266,6 +266,23 @@ class BulkRetryRequest(BaseModel):
         return self
 
 
+class PruneSimulationsRequest(BaseModel):
+    """!Payload for deleting historical project simulations."""
+    statuses: list[str] = Field(default_factory=lambda: ["completed", "failed", "cancelled"])
+    before_utc: datetime | None = None
+    dry_run: bool = True
+    limit: int = 1000
+
+    @model_validator(mode="after")
+    def validate_prune_request(self) -> "PruneSimulationsRequest":
+        """!Validate prune request parameters."""
+        if self.limit < 1:
+            raise ValueError("limit must be >= 1")
+        if not self.statuses:
+            raise ValueError("statuses must contain at least one status")
+        return self
+
+
 @app.get("/health")
 def health() -> dict:
     """!Return a lightweight health payload."""
@@ -1050,6 +1067,47 @@ def retry_project_simulations(project_id: str, payload: BulkRetryRequest, x_api_
         "matched_jobs": len(candidates),
         "retried_jobs": len(created),
         "retries": created,
+    }
+
+
+@app.post("/v1/projects/{project_id}/simulations/prune")
+def prune_project_simulations(project_id: str, payload: PruneSimulationsRequest, x_api_token: str | None = Header(default=None)) -> dict:
+    """!Delete historical simulations for a project (supports dry-run)."""
+    _require_write_token(x_api_token)
+    before_dt = payload.before_utc
+    statuses = set(payload.statuses)
+
+    with LOCK:
+        if project_id not in PROJECTS:
+            raise HTTPException(status_code=404, detail="project not found")
+
+        candidates: list[str] = []
+        for job_id, job in JOBS.items():
+            if job.get("payload", {}).get("project_id") != project_id:
+                continue
+            if job.get("status") not in statuses:
+                continue
+            if before_dt is not None:
+                submitted_dt = _parse_iso8601_utc(job.get("submitted_at"))
+                if submitted_dt is None or submitted_dt >= before_dt:
+                    continue
+            candidates.append(job_id)
+            if len(candidates) >= payload.limit:
+                break
+
+        if not payload.dry_run:
+            for job_id in candidates:
+                JOBS.pop(job_id, None)
+            _persist_state()
+
+    return {
+        "project_id": project_id,
+        "dry_run": payload.dry_run,
+        "requested_statuses": payload.statuses,
+        "before_utc": payload.before_utc.isoformat() if payload.before_utc else None,
+        "candidate_jobs": len(candidates),
+        "job_ids": candidates,
+        "deleted_jobs": 0 if payload.dry_run else len(candidates),
     }
 
 

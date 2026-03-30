@@ -52,6 +52,7 @@ the next sections describe what to build next.
   - `GET /v1/projects/{project_id}/simulations/summary` (aggregated status/site counts for dashboards)
   - `GET /v1/projects/{project_id}/simulations/timeline/summary` (avg/p95 timeline metrics)
   - `POST /v1/projects/{project_id}/simulations/retry-failed` (bulk retry by status with limit)
+  - `POST /v1/projects/{project_id}/simulations/prune` (dry-run or delete historical jobs by status/date)
   - `POST /v1/simulations/{job_id}/start`
   - `POST /v1/simulations/{job_id}/complete`
   - `POST /v1/simulations/{job_id}/retry` (re-queue a child job from an existing run)
