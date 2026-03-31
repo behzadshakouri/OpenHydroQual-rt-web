@@ -1289,6 +1289,46 @@ def get_site_diagnostics(project_id: str, site_id: str, stale_after_seconds: int
         "stale_queue_count": len(stale_site_queue),
     }
 
+
+@app.get("/v1/projects/{project_id}/actions")
+def get_project_actions(project_id: str, stale_after_seconds: int = 900) -> dict:
+    """!Return simple recommended operator actions based on current project state."""
+    diagnostics = get_project_diagnostics(project_id=project_id, stale_after_seconds=stale_after_seconds)
+    failures = list_project_failures(project_id=project_id, include_cancelled=True, limit=1000, offset=0)
+
+    unretried_failures = [row for row in failures["failures"] if not row.get("has_retry_child")]
+    actions: list[dict] = []
+    if diagnostics["stale_queue_count"] > 0:
+        actions.append(
+            {
+                "action": "requeue_stale",
+                "reason": f"{diagnostics['stale_queue_count']} stale queued/running jobs detected",
+                "endpoint": f"/v1/projects/{project_id}/simulations/requeue-stale",
+            }
+        )
+    if unretried_failures:
+        actions.append(
+            {
+                "action": "retry_failures",
+                "reason": f"{len(unretried_failures)} failed/cancelled jobs have no retry child",
+                "endpoint": f"/v1/projects/{project_id}/simulations/retry-failed",
+            }
+        )
+    if not actions:
+        actions.append(
+            {
+                "action": "none",
+                "reason": "No immediate remediation actions suggested",
+                "endpoint": None,
+            }
+        )
+
+    return {
+        "project_id": project_id,
+        "stale_after_seconds": stale_after_seconds,
+        "recommended_actions": actions,
+    }
+
 @app.get("/v1/simulations/{job_id}")
 def get_simulation(job_id: str) -> dict:
     """!Get job lifecycle metadata."""
