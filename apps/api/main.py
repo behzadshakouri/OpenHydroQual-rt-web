@@ -311,6 +311,23 @@ class PruneSimulationsRequest(BaseModel):
         return self
 
 
+class RequeueStaleRequest(BaseModel):
+    """!Payload for requeueing stale queued/running simulations."""
+    stale_after_seconds: int = 900
+    include_running: bool = True
+    limit: int = 100
+    dry_run: bool = True
+
+    @model_validator(mode="after")
+    def validate_requeue_request(self) -> "RequeueStaleRequest":
+        """!Validate stale requeue request parameters."""
+        if self.stale_after_seconds < 1:
+            raise ValueError("stale_after_seconds must be >= 1")
+        if self.limit < 1:
+            raise ValueError("limit must be >= 1")
+        return self
+
+
 @app.get("/health")
 def health() -> dict:
     """!Return a lightweight health payload."""
@@ -1290,6 +1307,75 @@ def prune_project_simulations(project_id: str, payload: PruneSimulationsRequest,
         "candidate_jobs": len(candidates),
         "job_ids": candidates,
         "deleted_jobs": 0 if payload.dry_run else len(candidates),
+    }
+
+
+@app.post("/v1/projects/{project_id}/simulations/requeue-stale")
+def requeue_stale_simulations(project_id: str, payload: RequeueStaleRequest, x_api_token: str | None = Header(default=None)) -> dict:
+    """!Requeue stale queued/running simulations for a project (supports dry-run)."""
+    _require_write_token(x_api_token)
+    now = datetime.now(timezone.utc)
+    statuses = {"queued"}
+    if payload.include_running:
+        statuses.add("running")
+
+    with LOCK:
+        if project_id not in PROJECTS:
+            raise HTTPException(status_code=404, detail="project not found")
+
+        stale_ids: list[str] = []
+        for job_id, job in JOBS.items():
+            if job.get("payload", {}).get("project_id") != project_id:
+                continue
+            if job.get("status") not in statuses:
+                continue
+            submitted_dt = _parse_iso8601_utc(job.get("submitted_at"))
+            if not submitted_dt:
+                continue
+            age_seconds = int((now - submitted_dt).total_seconds())
+            if age_seconds < payload.stale_after_seconds:
+                continue
+            stale_ids.append(job_id)
+            if len(stale_ids) >= payload.limit:
+                break
+
+    if payload.dry_run:
+        return {
+            "project_id": project_id,
+            "dry_run": True,
+            "stale_after_seconds": payload.stale_after_seconds,
+            "candidate_jobs": len(stale_ids),
+            "requeue_count": 0,
+            "requeues": [],
+        }
+
+    created: list[dict] = []
+    created_at = now.isoformat()
+    for stale_id in stale_ids:
+        with LOCK:
+            original = JOBS.get(stale_id)
+            if not original:
+                continue
+            new_job_id = _create_queued_job(dict(original.get("payload", {})), created_at)
+            JOBS[new_job_id]["retry_of"] = stale_id
+            original.setdefault("events", []).append({"at": created_at, "status": "requeued_stale", "new_job_id": new_job_id})
+            _persist_state()
+
+        _notify_external(
+            "job.requeued_stale",
+            new_job_id,
+            "queued",
+            payload={"retry_of": stale_id, "original_status": original.get("status")},
+        )
+        created.append({"job_id": new_job_id, "retry_of": stale_id})
+
+    return {
+        "project_id": project_id,
+        "dry_run": False,
+        "stale_after_seconds": payload.stale_after_seconds,
+        "candidate_jobs": len(stale_ids),
+        "requeue_count": len(created),
+        "requeues": created,
     }
 
 
