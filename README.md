@@ -55,6 +55,7 @@ the next sections describe what to build next.
   - `GET /v1/projects/{project_id}/simulations/failures` (failed/cancelled records with retry hints)
   - `GET /v1/projects/{project_id}/simulations/queue` (queued/running jobs with stale indicators)
   - `GET /v1/projects/{project_id}/diagnostics` (consolidated operator diagnostics snapshot)
+  - `GET /v1/projects/{project_id}/sites/{site_id}/diagnostics` (site-scoped diagnostics snapshot)
   - `POST /v1/projects/{project_id}/simulations/retry-failed` (bulk retry by status with limit)
   - `POST /v1/projects/{project_id}/simulations/requeue-stale` (dry-run or requeue stale queued/running jobs)
   - `POST /v1/projects/{project_id}/simulations/prune` (dry-run or delete historical jobs by status/date)

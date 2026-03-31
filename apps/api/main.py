@@ -1262,6 +1262,33 @@ def get_project_diagnostics(project_id: str, stale_after_seconds: int = 900) -> 
         "stale_queue_count": stale_count,
     }
 
+
+@app.get("/v1/projects/{project_id}/sites/{site_id}/diagnostics")
+def get_site_diagnostics(project_id: str, site_id: str, stale_after_seconds: int = 900) -> dict:
+    """!Return consolidated diagnostics for a specific project site."""
+    summary = get_site_simulations_summary(project_id=project_id, site_id=site_id)
+    failures = list_project_failures(project_id=project_id, include_cancelled=True, limit=1000, offset=0)
+    queue = list_project_queue(
+        project_id=project_id,
+        include_running=True,
+        stale_after_seconds=stale_after_seconds,
+        limit=1000,
+        offset=0,
+    )
+
+    site_failures = [row for row in failures["failures"] if row.get("site_id") == site_id]
+    site_queue = [row for row in queue["jobs"] if row.get("site_id") == site_id]
+    stale_site_queue = [row for row in site_queue if row.get("is_stale")]
+    return {
+        "project_id": project_id,
+        "site_id": site_id,
+        "stale_after_seconds": stale_after_seconds,
+        "summary": summary,
+        "failure_count": len(site_failures),
+        "queue_count": len(site_queue),
+        "stale_queue_count": len(stale_site_queue),
+    }
+
 @app.get("/v1/simulations/{job_id}")
 def get_simulation(job_id: str) -> dict:
     """!Get job lifecycle metadata."""
