@@ -79,6 +79,7 @@ the next sections describe what to build next.
   - `POST /v1/internal/simulations/{job_id}/result` (worker callback)
   - `GET /metrics` (Prometheus-style counters)
   - `GET /v1/system/idempotency` (operation idempotency cache health/stats)
+  - `GET /v1/system/contracts` (contract catalog + schema availability for polyglot clients)
   - `GET /v1/system/webhooks` (recent outbound webhook delivery audit records)
   - `GET /v1/system/state` (snapshot counts for projects/sites/jobs/idempotency/webhook audit)
   - `POST /v1/system/webhooks/replay` (replay a webhook event for a job)
