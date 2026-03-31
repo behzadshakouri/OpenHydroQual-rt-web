@@ -355,6 +355,12 @@ class MaintenanceCleanupRequest(BaseModel):
     dry_run: bool = True
 
 
+class ReplayWebhookRequest(BaseModel):
+    """!Payload for replaying outbound webhook for a job."""
+    job_id: str
+    event_type: str | None = None
+
+
 @app.get("/health")
 def health() -> dict:
     """!Return a lightweight health payload."""
@@ -436,6 +442,32 @@ def cleanup_system_state(payload: MaintenanceCleanupRequest, x_api_token: str | 
         "clear_operation_idempotency": payload.clear_operation_idempotency,
         "before": before,
         "after": after,
+    }
+
+
+@app.post("/v1/system/webhooks/replay")
+def replay_webhook(payload: ReplayWebhookRequest, x_api_token: str | None = Header(default=None)) -> dict:
+    """!Replay outbound webhook for a specific job using current job state."""
+    _require_write_token(x_api_token)
+    job = JOBS.get(payload.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    status = job.get("status", "unknown")
+    event_type = payload.event_type or f"job.{status}"
+    notify_payload = {
+        "replay": True,
+        "submitted_at": job.get("submitted_at"),
+        "finished_at": job.get("finished_at"),
+        "retry_of": job.get("retry_of"),
+    }
+    delivered = _notify_external(event_type, payload.job_id, status, payload=notify_payload)
+    return {
+        "job_id": payload.job_id,
+        "status": status,
+        "event_type": event_type,
+        "delivered": delivered,
+        "replay": True,
     }
 
 @app.post("/v1/projects")
