@@ -348,6 +348,13 @@ class RequeueStaleRequest(BaseModel):
         return self
 
 
+class MaintenanceCleanupRequest(BaseModel):
+    """!Payload for maintenance cleanup operations."""
+    clear_webhook_audit: bool = False
+    clear_operation_idempotency: bool = False
+    dry_run: bool = True
+
+
 @app.get("/health")
 def health() -> dict:
     """!Return a lightweight health payload."""
@@ -401,6 +408,35 @@ def get_webhook_audit(limit: int = 50, only_failures: bool = False) -> dict:
         rows = [row for row in rows if row.get("success") is False]
     rows = rows[-limit:]
     return {"count": len(rows), "limit": limit, "only_failures": only_failures, "items": rows}
+
+
+@app.post("/v1/system/maintenance/cleanup")
+def cleanup_system_state(payload: MaintenanceCleanupRequest, x_api_token: str | None = Header(default=None)) -> dict:
+    """!Perform safe cleanup for idempotency/webhook operational state."""
+    _require_write_token(x_api_token)
+    with LOCK:
+        before = {
+            "webhook_audit_entries": len(WEBHOOK_AUDIT),
+            "operation_idempotency_entries": len(OPERATION_IDEMPOTENCY),
+        }
+        if not payload.dry_run:
+            if payload.clear_webhook_audit:
+                WEBHOOK_AUDIT.clear()
+            if payload.clear_operation_idempotency:
+                OPERATION_IDEMPOTENCY.clear()
+            _persist_state()
+        after = {
+            "webhook_audit_entries": len(WEBHOOK_AUDIT),
+            "operation_idempotency_entries": len(OPERATION_IDEMPOTENCY),
+        }
+
+    return {
+        "dry_run": payload.dry_run,
+        "clear_webhook_audit": payload.clear_webhook_audit,
+        "clear_operation_idempotency": payload.clear_operation_idempotency,
+        "before": before,
+        "after": after,
+    }
 
 @app.post("/v1/projects")
 def create_project(payload: ProjectCreate, x_api_token: str | None = Header(default=None)) -> dict:

@@ -72,6 +72,7 @@ the next sections describe what to build next.
   - `GET /metrics` (Prometheus-style counters)
   - `GET /v1/system/idempotency` (operation idempotency cache health/stats)
   - `GET /v1/system/webhooks` (recent outbound webhook delivery audit records)
+  - `POST /v1/system/maintenance/cleanup` (dry-run or clear webhook/idempotency operational state)
 - `/metrics` includes outbound webhook delivery counters (`webhook_notify_success_total`, `webhook_notify_failure_total`)
 - Idempotency support via `X-Idempotency-Key` header on create endpoint
 - `POST /v1/projects/{project_id}/simulate/batch` also supports `X-Idempotency-Key` to replay prior batch responses.
