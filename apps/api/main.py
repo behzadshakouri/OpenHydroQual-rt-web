@@ -361,6 +361,14 @@ class ReplayWebhookRequest(BaseModel):
     event_type: str | None = None
 
 
+class ExecuteActionRequest(BaseModel):
+    """!Payload for executing a recommended project action."""
+    action: Literal["requeue_stale", "retry_failures"]
+    dry_run: bool = True
+    stale_after_seconds: int = 900
+    limit: int = 100
+
+
 @app.get("/health")
 def health() -> dict:
     """!Return a lightweight health payload."""
@@ -1328,6 +1336,40 @@ def get_project_actions(project_id: str, stale_after_seconds: int = 900) -> dict
         "stale_after_seconds": stale_after_seconds,
         "recommended_actions": actions,
     }
+
+
+@app.post("/v1/projects/{project_id}/actions/execute")
+def execute_project_action(project_id: str, payload: ExecuteActionRequest, x_api_token: str | None = Header(default=None)) -> dict:
+    """!Execute a recommended project action with optional dry-run controls."""
+    _require_write_token(x_api_token)
+    if payload.action == "requeue_stale":
+        result = requeue_stale_simulations(
+            project_id=project_id,
+            payload=RequeueStaleRequest(
+                stale_after_seconds=payload.stale_after_seconds,
+                include_running=True,
+                limit=payload.limit,
+                dry_run=payload.dry_run,
+            ),
+            x_api_token=x_api_token,
+        )
+    else:
+        result = retry_project_simulations(
+            project_id=project_id,
+            payload=BulkRetryRequest(statuses=["failed", "cancelled"], limit=payload.limit),
+            x_api_token=x_api_token,
+        )
+        if payload.dry_run:
+            # Re-map retry response for dry-run semantics.
+            result = {
+                "project_id": project_id,
+                "dry_run": True,
+                "action": payload.action,
+                "candidate_jobs": result["matched_jobs"],
+                "requeue_count": 0,
+            }
+
+    return {"project_id": project_id, "action": payload.action, "result": result}
 
 @app.get("/v1/simulations/{job_id}")
 def get_simulation(job_id: str) -> dict:
