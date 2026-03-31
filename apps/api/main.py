@@ -445,6 +445,25 @@ def get_system_state_snapshot() -> dict:
         }
 
 
+@app.get("/v1/system/contracts")
+def get_contract_catalog() -> dict:
+    """!Return canonical data-contract metadata for polyglot clients/workers."""
+    return {
+        "contracts": [
+            {
+                "name": "simulation_request.v1",
+                "schema_path": "packages/data-contracts/simulation_request.v1.schema.json",
+                "description": "Simulation submit payload contract.",
+            },
+            {
+                "name": "simulation_result.v1",
+                "schema_path": "packages/data-contracts/simulation_result.v1.schema.json",
+                "description": "Simulation result callback payload contract.",
+            },
+        ],
+    }
+
+
 @app.post("/v1/system/maintenance/cleanup")
 def cleanup_system_state(payload: MaintenanceCleanupRequest, x_api_token: str | None = Header(default=None)) -> dict:
     """!Perform safe cleanup for idempotency/webhook operational state."""
