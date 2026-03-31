@@ -445,6 +445,25 @@ def get_system_state_snapshot() -> dict:
         }
 
 
+@app.get("/v1/system/contracts")
+def get_contract_catalog() -> dict:
+    """!Return canonical data-contract metadata for polyglot clients/workers."""
+    return {
+        "contracts": [
+            {
+                "name": "simulation_request.v1",
+                "schema_path": "packages/data-contracts/simulation_request.v1.schema.json",
+                "description": "Simulation submit payload contract.",
+            },
+            {
+                "name": "simulation_result.v1",
+                "schema_path": "packages/data-contracts/simulation_result.v1.schema.json",
+                "description": "Simulation result callback payload contract.",
+            },
+        ],
+    }
+
+
 @app.post("/v1/system/maintenance/cleanup")
 def cleanup_system_state(payload: MaintenanceCleanupRequest, x_api_token: str | None = Header(default=None)) -> dict:
     """!Perform safe cleanup for idempotency/webhook operational state."""
@@ -1335,6 +1354,48 @@ def get_project_actions(project_id: str, stale_after_seconds: int = 900) -> dict
         "project_id": project_id,
         "stale_after_seconds": stale_after_seconds,
         "recommended_actions": actions,
+    }
+
+
+@app.get("/v1/projects/{project_id}/sla")
+def get_project_sla(
+    project_id: str,
+    max_stale_queue_jobs: int = 0,
+    max_failure_rate: float = 0.2,
+    stale_after_seconds: int = 900,
+) -> dict:
+    """!Evaluate lightweight SLA thresholds for project operations."""
+    if max_stale_queue_jobs < 0:
+        raise HTTPException(status_code=400, detail="max_stale_queue_jobs must be >= 0")
+    if max_failure_rate < 0 or max_failure_rate > 1:
+        raise HTTPException(status_code=400, detail="max_failure_rate must be between 0 and 1")
+
+    diagnostics = get_project_diagnostics(project_id=project_id, stale_after_seconds=stale_after_seconds)
+    summary = diagnostics["summary"]
+    total_jobs = summary["total_jobs"]
+    failed_jobs = summary["by_status"].get("failed", 0) + summary["by_status"].get("cancelled", 0)
+    failure_rate = (failed_jobs / total_jobs) if total_jobs else 0.0
+    stale_queue_jobs = diagnostics["stale_queue_count"]
+
+    breaches = {
+        "stale_queue_breach": stale_queue_jobs > max_stale_queue_jobs,
+        "failure_rate_breach": failure_rate > max_failure_rate,
+    }
+    return {
+        "project_id": project_id,
+        "thresholds": {
+            "max_stale_queue_jobs": max_stale_queue_jobs,
+            "max_failure_rate": max_failure_rate,
+            "stale_after_seconds": stale_after_seconds,
+        },
+        "observed": {
+            "total_jobs": total_jobs,
+            "failed_or_cancelled_jobs": failed_jobs,
+            "failure_rate": failure_rate,
+            "stale_queue_jobs": stale_queue_jobs,
+        },
+        "breaches": breaches,
+        "is_healthy": not any(breaches.values()),
     }
 
 

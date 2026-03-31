@@ -33,6 +33,10 @@ the next sections describe what to build next.
 6. **Contract + integration tests**
    - Add full integration tests against real Redis/Postgres and a mocked OpenHydroQual process.
    - Add compatibility tests for data-contract versions across API/worker boundaries.
+7. **Polyglot runtime support (C++ and other languages)**
+   - Publish language-agnostic API/event contract docs plus JSON Schema examples for submit/result/event flows.
+   - Add a C++ reference worker/client (or SDK) that can submit simulations, consume callbacks/webhooks, and report results.
+   - Define conformance tests so non-Python runtimes can be validated against the same behavior guarantees.
 
 ## Included
 - FastAPI app with:
@@ -143,6 +147,10 @@ curl -s -X POST http://localhost:8000/v1/simulations/<JOB_ID>/complete \
 - Run API/worker containers on **ECS Fargate** (or EKS) with private networking.
 - Expose API via **ALB** + HTTPS; keep OHQuery service internal behind private ALB or service discovery.
 - Set environment variables from `.env.example` using AWS Secrets Manager / SSM Parameter Store.
+
+## Multi-language integration
+- Python is the reference scaffold implementation, but the API/event contracts are language-agnostic.
+- For C++ integration planning, see `docs/cpp_integration.md`.
 
 Minimum environment variables in AWS:
 - `ASYNC_EXECUTION=true`
