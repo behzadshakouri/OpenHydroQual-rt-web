@@ -71,6 +71,7 @@ the next sections describe what to build next.
   - `POST /v1/internal/simulations/{job_id}/result` (worker callback)
   - `GET /metrics` (Prometheus-style counters)
   - `GET /v1/system/idempotency` (operation idempotency cache health/stats)
+  - `GET /v1/system/webhooks` (recent outbound webhook delivery audit records)
 - `/metrics` includes outbound webhook delivery counters (`webhook_notify_success_total`, `webhook_notify_failure_total`)
 - Idempotency support via `X-Idempotency-Key` header on create endpoint
 - `POST /v1/projects/{project_id}/simulate/batch` also supports `X-Idempotency-Key` to replay prior batch responses.
@@ -148,6 +149,7 @@ Minimum environment variables in AWS:
 - **Receive in web clients:** call `GET /v1/simulations/{job_id}/events/poll?after_index=<n>&timeout_s=15` for long-poll incremental updates.
 - Optional write protection: set `WRITE_API_TOKEN` and pass `X-Api-Token` on mutating endpoints.
 - Batch idempotency cache TTL can be tuned via `OPERATION_IDEMPOTENCY_TTL_SECONDS` (default 86400).
+- Outbound webhook audit retention can be tuned via `WEBHOOK_AUDIT_MAX` (default 200 records).
 - Optional auth header for outbound events: set `OUTBOUND_WEBHOOK_TOKEN` (sent as `Authorization: Bearer <token>`).
 
 Example (Lambda Function URL or API Gateway webhook target):

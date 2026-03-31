@@ -22,6 +22,7 @@ app = FastAPI(title="OHQ Real-time API", version="0.2.0")
 JOBS: dict[str, dict] = {}
 IDEMPOTENCY_INDEX: dict[str, str] = {}
 OPERATION_IDEMPOTENCY: dict[str, dict] = {}
+WEBHOOK_AUDIT: list[dict] = []
 LOCK = Lock()
 PROJECTS: dict[str, dict] = {}
 SITES: dict[str, dict] = {}
@@ -41,6 +42,7 @@ OUTBOUND_WEBHOOK_URL = os.getenv("OUTBOUND_WEBHOOK_URL", "").strip()
 OUTBOUND_WEBHOOK_TOKEN = os.getenv("OUTBOUND_WEBHOOK_TOKEN", "").strip()
 WRITE_API_TOKEN = os.getenv("WRITE_API_TOKEN", "").strip()
 OPERATION_IDEMPOTENCY_TTL_SECONDS = int(os.getenv("OPERATION_IDEMPOTENCY_TTL_SECONDS", "86400"))
+WEBHOOK_AUDIT_MAX = int(os.getenv("WEBHOOK_AUDIT_MAX", "200"))
 
 
 def _load_state() -> None:
@@ -52,6 +54,7 @@ def _load_state() -> None:
         JOBS.update(payload.get("jobs", {}))
         IDEMPOTENCY_INDEX.update(payload.get("idempotency_index", {}))
         OPERATION_IDEMPOTENCY.update(payload.get("operation_idempotency", {}))
+        WEBHOOK_AUDIT.extend(payload.get("webhook_audit", []))
         PROJECTS.update(payload.get("projects", {}))
         SITES.update(payload.get("sites", {}))
     except (OSError, json.JSONDecodeError):
@@ -69,6 +72,7 @@ def _persist_state() -> None:
                 "jobs": JOBS,
                 "idempotency_index": IDEMPOTENCY_INDEX,
                 "operation_idempotency": OPERATION_IDEMPOTENCY,
+                "webhook_audit": WEBHOOK_AUDIT[-WEBHOOK_AUDIT_MAX:],
                 "projects": PROJECTS,
                 "sites": SITES,
             }
@@ -101,12 +105,28 @@ def _notify_external(event_type: str, job_id: str, status: str, payload: dict | 
         headers=headers,
         method="POST",
     )
+    audit_row = {
+        "event_type": event_type,
+        "job_id": job_id,
+        "status": status,
+        "sent_at_utc": body["sent_at_utc"],
+    }
     try:
         with urlrequest.urlopen(req, timeout=3):  # nosec B310 - controlled integration URL
             METRICS["webhook_notify_success_total"] += 1
+            audit_row["success"] = True
+            audit_row["error"] = None
+            WEBHOOK_AUDIT.append(audit_row)
+            if len(WEBHOOK_AUDIT) > WEBHOOK_AUDIT_MAX:
+                del WEBHOOK_AUDIT[:-WEBHOOK_AUDIT_MAX]
             return True
-    except (URLError, TimeoutError, OSError):
+    except (URLError, TimeoutError, OSError) as exc:
         METRICS["webhook_notify_failure_total"] += 1
+        audit_row["success"] = False
+        audit_row["error"] = str(exc)
+        WEBHOOK_AUDIT.append(audit_row)
+        if len(WEBHOOK_AUDIT) > WEBHOOK_AUDIT_MAX:
+            del WEBHOOK_AUDIT[:-WEBHOOK_AUDIT_MAX]
         return False
 
 
@@ -367,6 +387,20 @@ def get_idempotency_stats() -> dict:
         "newest_entry_age_seconds": newest_age,
         "average_entry_age_seconds": avg_age,
     }
+
+
+@app.get("/v1/system/webhooks")
+def get_webhook_audit(limit: int = 50, only_failures: bool = False) -> dict:
+    """!Return recent outbound webhook delivery attempts."""
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+
+    with LOCK:
+        rows = list(WEBHOOK_AUDIT)
+    if only_failures:
+        rows = [row for row in rows if row.get("success") is False]
+    rows = rows[-limit:]
+    return {"count": len(rows), "limit": limit, "only_failures": only_failures, "items": rows}
 
 @app.post("/v1/projects")
 def create_project(payload: ProjectCreate, x_api_token: str | None = Header(default=None)) -> dict:
