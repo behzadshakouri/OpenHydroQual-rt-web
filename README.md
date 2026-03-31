@@ -55,6 +55,7 @@ the next sections describe what to build next.
   - `GET /v1/projects/{project_id}/simulations/failures` (failed/cancelled records with retry hints)
   - `GET /v1/projects/{project_id}/simulations/queue` (queued/running jobs with stale indicators)
   - `POST /v1/projects/{project_id}/simulations/retry-failed` (bulk retry by status with limit)
+  - `POST /v1/projects/{project_id}/simulations/requeue-stale` (dry-run or requeue stale queued/running jobs)
   - `POST /v1/projects/{project_id}/simulations/prune` (dry-run or delete historical jobs by status/date)
   - `POST /v1/simulations/{job_id}/start`
   - `POST /v1/simulations/{job_id}/complete`
@@ -69,6 +70,11 @@ the next sections describe what to build next.
   - `GET /v1/simulations/{job_id}/results`
   - `POST /v1/internal/simulations/{job_id}/result` (worker callback)
   - `GET /metrics` (Prometheus-style counters)
+  - `GET /v1/system/idempotency` (operation idempotency cache health/stats)
+  - `GET /v1/system/webhooks` (recent outbound webhook delivery audit records)
+  - `POST /v1/system/webhooks/replay` (replay a webhook event for a job)
+  - `POST /v1/system/maintenance/cleanup` (dry-run or clear webhook/idempotency operational state)
+- `/metrics` includes outbound webhook delivery counters (`webhook_notify_success_total`, `webhook_notify_failure_total`)
 - Idempotency support via `X-Idempotency-Key` header on create endpoint
 - `POST /v1/projects/{project_id}/simulate/batch` also supports `X-Idempotency-Key` to replay prior batch responses.
 - `POST /v1/simulations` validates project/site existence and facility type match
@@ -145,6 +151,7 @@ Minimum environment variables in AWS:
 - **Receive in web clients:** call `GET /v1/simulations/{job_id}/events/poll?after_index=<n>&timeout_s=15` for long-poll incremental updates.
 - Optional write protection: set `WRITE_API_TOKEN` and pass `X-Api-Token` on mutating endpoints.
 - Batch idempotency cache TTL can be tuned via `OPERATION_IDEMPOTENCY_TTL_SECONDS` (default 86400).
+- Outbound webhook audit retention can be tuned via `WEBHOOK_AUDIT_MAX` (default 200 records).
 - Optional auth header for outbound events: set `OUTBOUND_WEBHOOK_TOKEN` (sent as `Authorization: Bearer <token>`).
 
 Example (Lambda Function URL or API Gateway webhook target):

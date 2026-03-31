@@ -22,6 +22,7 @@ app = FastAPI(title="OHQ Real-time API", version="0.2.0")
 JOBS: dict[str, dict] = {}
 IDEMPOTENCY_INDEX: dict[str, str] = {}
 OPERATION_IDEMPOTENCY: dict[str, dict] = {}
+WEBHOOK_AUDIT: list[dict] = []
 LOCK = Lock()
 PROJECTS: dict[str, dict] = {}
 SITES: dict[str, dict] = {}
@@ -34,11 +35,14 @@ METRICS: dict[str, int] = {
     "sites_created_total": 0,
     "jobs_failed_total": 0,
     "jobs_cancelled_total": 0,
+    "webhook_notify_success_total": 0,
+    "webhook_notify_failure_total": 0,
 }
 OUTBOUND_WEBHOOK_URL = os.getenv("OUTBOUND_WEBHOOK_URL", "").strip()
 OUTBOUND_WEBHOOK_TOKEN = os.getenv("OUTBOUND_WEBHOOK_TOKEN", "").strip()
 WRITE_API_TOKEN = os.getenv("WRITE_API_TOKEN", "").strip()
 OPERATION_IDEMPOTENCY_TTL_SECONDS = int(os.getenv("OPERATION_IDEMPOTENCY_TTL_SECONDS", "86400"))
+WEBHOOK_AUDIT_MAX = int(os.getenv("WEBHOOK_AUDIT_MAX", "200"))
 
 
 def _load_state() -> None:
@@ -50,6 +54,7 @@ def _load_state() -> None:
         JOBS.update(payload.get("jobs", {}))
         IDEMPOTENCY_INDEX.update(payload.get("idempotency_index", {}))
         OPERATION_IDEMPOTENCY.update(payload.get("operation_idempotency", {}))
+        WEBHOOK_AUDIT.extend(payload.get("webhook_audit", []))
         PROJECTS.update(payload.get("projects", {}))
         SITES.update(payload.get("sites", {}))
     except (OSError, json.JSONDecodeError):
@@ -67,6 +72,7 @@ def _persist_state() -> None:
                 "jobs": JOBS,
                 "idempotency_index": IDEMPOTENCY_INDEX,
                 "operation_idempotency": OPERATION_IDEMPOTENCY,
+                "webhook_audit": WEBHOOK_AUDIT[-WEBHOOK_AUDIT_MAX:],
                 "projects": PROJECTS,
                 "sites": SITES,
             }
@@ -99,10 +105,28 @@ def _notify_external(event_type: str, job_id: str, status: str, payload: dict | 
         headers=headers,
         method="POST",
     )
+    audit_row = {
+        "event_type": event_type,
+        "job_id": job_id,
+        "status": status,
+        "sent_at_utc": body["sent_at_utc"],
+    }
     try:
         with urlrequest.urlopen(req, timeout=3):  # nosec B310 - controlled integration URL
+            METRICS["webhook_notify_success_total"] += 1
+            audit_row["success"] = True
+            audit_row["error"] = None
+            WEBHOOK_AUDIT.append(audit_row)
+            if len(WEBHOOK_AUDIT) > WEBHOOK_AUDIT_MAX:
+                del WEBHOOK_AUDIT[:-WEBHOOK_AUDIT_MAX]
             return True
-    except (URLError, TimeoutError, OSError):
+    except (URLError, TimeoutError, OSError) as exc:
+        METRICS["webhook_notify_failure_total"] += 1
+        audit_row["success"] = False
+        audit_row["error"] = str(exc)
+        WEBHOOK_AUDIT.append(audit_row)
+        if len(WEBHOOK_AUDIT) > WEBHOOK_AUDIT_MAX:
+            del WEBHOOK_AUDIT[:-WEBHOOK_AUDIT_MAX]
         return False
 
 
@@ -307,6 +331,36 @@ class PruneSimulationsRequest(BaseModel):
         return self
 
 
+class RequeueStaleRequest(BaseModel):
+    """!Payload for requeueing stale queued/running simulations."""
+    stale_after_seconds: int = 900
+    include_running: bool = True
+    limit: int = 100
+    dry_run: bool = True
+
+    @model_validator(mode="after")
+    def validate_requeue_request(self) -> "RequeueStaleRequest":
+        """!Validate stale requeue request parameters."""
+        if self.stale_after_seconds < 1:
+            raise ValueError("stale_after_seconds must be >= 1")
+        if self.limit < 1:
+            raise ValueError("limit must be >= 1")
+        return self
+
+
+class MaintenanceCleanupRequest(BaseModel):
+    """!Payload for maintenance cleanup operations."""
+    clear_webhook_audit: bool = False
+    clear_operation_idempotency: bool = False
+    dry_run: bool = True
+
+
+class ReplayWebhookRequest(BaseModel):
+    """!Payload for replaying outbound webhook for a job."""
+    job_id: str
+    event_type: str | None = None
+
+
 @app.get("/health")
 def health() -> dict:
     """!Return a lightweight health payload."""
@@ -319,6 +373,102 @@ def metrics() -> Response:
     lines = [f"{k} {v}" for k, v in METRICS.items()]
     body = "\n".join(lines) + "\n"
     return Response(content=body, media_type="text/plain; version=0.0.4")
+
+
+@app.get("/v1/system/idempotency")
+def get_idempotency_stats() -> dict:
+    """!Return operation-idempotency cache health and sizing metrics."""
+    with LOCK:
+        _prune_operation_idempotency()
+        entries = list(OPERATION_IDEMPOTENCY.values())
+
+    now = datetime.now(timezone.utc)
+    ages = []
+    for entry in entries:
+        created_at = _parse_iso8601_utc(entry.get("created_at"))
+        if created_at is None:
+            continue
+        ages.append(max((now - created_at).total_seconds(), 0.0))
+
+    oldest_age = max(ages) if ages else None
+    newest_age = min(ages) if ages else None
+    avg_age = (sum(ages) / len(ages)) if ages else None
+    return {
+        "operation_idempotency_ttl_seconds": OPERATION_IDEMPOTENCY_TTL_SECONDS,
+        "operation_idempotency_entries": len(entries),
+        "oldest_entry_age_seconds": oldest_age,
+        "newest_entry_age_seconds": newest_age,
+        "average_entry_age_seconds": avg_age,
+    }
+
+
+@app.get("/v1/system/webhooks")
+def get_webhook_audit(limit: int = 50, only_failures: bool = False) -> dict:
+    """!Return recent outbound webhook delivery attempts."""
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+
+    with LOCK:
+        rows = list(WEBHOOK_AUDIT)
+    if only_failures:
+        rows = [row for row in rows if row.get("success") is False]
+    rows = rows[-limit:]
+    return {"count": len(rows), "limit": limit, "only_failures": only_failures, "items": rows}
+
+
+@app.post("/v1/system/maintenance/cleanup")
+def cleanup_system_state(payload: MaintenanceCleanupRequest, x_api_token: str | None = Header(default=None)) -> dict:
+    """!Perform safe cleanup for idempotency/webhook operational state."""
+    _require_write_token(x_api_token)
+    with LOCK:
+        before = {
+            "webhook_audit_entries": len(WEBHOOK_AUDIT),
+            "operation_idempotency_entries": len(OPERATION_IDEMPOTENCY),
+        }
+        if not payload.dry_run:
+            if payload.clear_webhook_audit:
+                WEBHOOK_AUDIT.clear()
+            if payload.clear_operation_idempotency:
+                OPERATION_IDEMPOTENCY.clear()
+            _persist_state()
+        after = {
+            "webhook_audit_entries": len(WEBHOOK_AUDIT),
+            "operation_idempotency_entries": len(OPERATION_IDEMPOTENCY),
+        }
+
+    return {
+        "dry_run": payload.dry_run,
+        "clear_webhook_audit": payload.clear_webhook_audit,
+        "clear_operation_idempotency": payload.clear_operation_idempotency,
+        "before": before,
+        "after": after,
+    }
+
+
+@app.post("/v1/system/webhooks/replay")
+def replay_webhook(payload: ReplayWebhookRequest, x_api_token: str | None = Header(default=None)) -> dict:
+    """!Replay outbound webhook for a specific job using current job state."""
+    _require_write_token(x_api_token)
+    job = JOBS.get(payload.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    status = job.get("status", "unknown")
+    event_type = payload.event_type or f"job.{status}"
+    notify_payload = {
+        "replay": True,
+        "submitted_at": job.get("submitted_at"),
+        "finished_at": job.get("finished_at"),
+        "retry_of": job.get("retry_of"),
+    }
+    delivered = _notify_external(event_type, payload.job_id, status, payload=notify_payload)
+    return {
+        "job_id": payload.job_id,
+        "status": status,
+        "event_type": event_type,
+        "delivered": delivered,
+        "replay": True,
+    }
 
 @app.post("/v1/projects")
 def create_project(payload: ProjectCreate, x_api_token: str | None = Header(default=None)) -> dict:
@@ -1286,6 +1436,75 @@ def prune_project_simulations(project_id: str, payload: PruneSimulationsRequest,
         "candidate_jobs": len(candidates),
         "job_ids": candidates,
         "deleted_jobs": 0 if payload.dry_run else len(candidates),
+    }
+
+
+@app.post("/v1/projects/{project_id}/simulations/requeue-stale")
+def requeue_stale_simulations(project_id: str, payload: RequeueStaleRequest, x_api_token: str | None = Header(default=None)) -> dict:
+    """!Requeue stale queued/running simulations for a project (supports dry-run)."""
+    _require_write_token(x_api_token)
+    now = datetime.now(timezone.utc)
+    statuses = {"queued"}
+    if payload.include_running:
+        statuses.add("running")
+
+    with LOCK:
+        if project_id not in PROJECTS:
+            raise HTTPException(status_code=404, detail="project not found")
+
+        stale_ids: list[str] = []
+        for job_id, job in JOBS.items():
+            if job.get("payload", {}).get("project_id") != project_id:
+                continue
+            if job.get("status") not in statuses:
+                continue
+            submitted_dt = _parse_iso8601_utc(job.get("submitted_at"))
+            if not submitted_dt:
+                continue
+            age_seconds = int((now - submitted_dt).total_seconds())
+            if age_seconds < payload.stale_after_seconds:
+                continue
+            stale_ids.append(job_id)
+            if len(stale_ids) >= payload.limit:
+                break
+
+    if payload.dry_run:
+        return {
+            "project_id": project_id,
+            "dry_run": True,
+            "stale_after_seconds": payload.stale_after_seconds,
+            "candidate_jobs": len(stale_ids),
+            "requeue_count": 0,
+            "requeues": [],
+        }
+
+    created: list[dict] = []
+    created_at = now.isoformat()
+    for stale_id in stale_ids:
+        with LOCK:
+            original = JOBS.get(stale_id)
+            if not original:
+                continue
+            new_job_id = _create_queued_job(dict(original.get("payload", {})), created_at)
+            JOBS[new_job_id]["retry_of"] = stale_id
+            original.setdefault("events", []).append({"at": created_at, "status": "requeued_stale", "new_job_id": new_job_id})
+            _persist_state()
+
+        _notify_external(
+            "job.requeued_stale",
+            new_job_id,
+            "queued",
+            payload={"retry_of": stale_id, "original_status": original.get("status")},
+        )
+        created.append({"job_id": new_job_id, "retry_of": stale_id})
+
+    return {
+        "project_id": project_id,
+        "dry_run": False,
+        "stale_after_seconds": payload.stale_after_seconds,
+        "candidate_jobs": len(stale_ids),
+        "requeue_count": len(created),
+        "requeues": created,
     }
 
 
