@@ -70,6 +70,7 @@ the next sections describe what to build next.
   - `GET /v1/simulations/{job_id}/results`
   - `POST /v1/internal/simulations/{job_id}/result` (worker callback)
   - `GET /metrics` (Prometheus-style counters)
+  - `GET /v1/system/idempotency` (operation idempotency cache health/stats)
 - `/metrics` includes outbound webhook delivery counters (`webhook_notify_success_total`, `webhook_notify_failure_total`)
 - Idempotency support via `X-Idempotency-Key` header on create endpoint
 - `POST /v1/projects/{project_id}/simulate/batch` also supports `X-Idempotency-Key` to replay prior batch responses.

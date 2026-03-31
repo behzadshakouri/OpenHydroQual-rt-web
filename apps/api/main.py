@@ -341,6 +341,33 @@ def metrics() -> Response:
     body = "\n".join(lines) + "\n"
     return Response(content=body, media_type="text/plain; version=0.0.4")
 
+
+@app.get("/v1/system/idempotency")
+def get_idempotency_stats() -> dict:
+    """!Return operation-idempotency cache health and sizing metrics."""
+    with LOCK:
+        _prune_operation_idempotency()
+        entries = list(OPERATION_IDEMPOTENCY.values())
+
+    now = datetime.now(timezone.utc)
+    ages = []
+    for entry in entries:
+        created_at = _parse_iso8601_utc(entry.get("created_at"))
+        if created_at is None:
+            continue
+        ages.append(max((now - created_at).total_seconds(), 0.0))
+
+    oldest_age = max(ages) if ages else None
+    newest_age = min(ages) if ages else None
+    avg_age = (sum(ages) / len(ages)) if ages else None
+    return {
+        "operation_idempotency_ttl_seconds": OPERATION_IDEMPOTENCY_TTL_SECONDS,
+        "operation_idempotency_entries": len(entries),
+        "oldest_entry_age_seconds": oldest_age,
+        "newest_entry_age_seconds": newest_age,
+        "average_entry_age_seconds": avg_age,
+    }
+
 @app.post("/v1/projects")
 def create_project(payload: ProjectCreate, x_api_token: str | None = Header(default=None)) -> dict:
     """!Create a project resource."""
