@@ -148,6 +148,10 @@ curl -s -X POST http://localhost:8000/v1/simulations/<JOB_ID>/complete \
 - Expose API via **ALB** + HTTPS; keep OHQuery service internal behind private ALB or service discovery.
 - Set environment variables from `.env.example` using AWS Secrets Manager / SSM Parameter Store.
 
+## Multi-language integration
+- Python is the reference scaffold implementation, but the API/event contracts are language-agnostic.
+- For C++ integration planning, see `docs/cpp_integration.md`.
+
 Minimum environment variables in AWS:
 - `ASYNC_EXECUTION=true`
 - `BROKER_URL` (ElastiCache endpoint)
