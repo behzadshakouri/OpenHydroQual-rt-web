@@ -2,6 +2,38 @@
 
 Reference scaffold for a real-time orchestration repo around OpenHydroQual/OHQuery.
 
+## Current status (March 30, 2026)
+This repository is currently a **starter orchestration scaffold**:
+- API and worker stubs are in place.
+- Core request/result data contracts are defined.
+- Queueing, callback, and project/site lifecycle endpoints exist.
+- Persistence and execution are still scaffold-level (in-memory/file-state + adapter stubs).
+
+If your goal is production web usage for OpenHydroQual
+([ArashMassoudieh/OpenHydroQual](https://github.com/ArashMassoudieh/OpenHydroQual)),
+the next sections describe what to build next.
+
+## What to build next (recommended sequence)
+1. **Execution integration (highest priority)**
+   - Replace stubbed execution with a robust OpenHydroQual runtime contract.
+   - Standardize input artifact generation (`.ohq`/script payloads) and output parsing.
+   - Add deterministic error mapping for engine failures/timeouts.
+2. **Persistence hardening**
+   - Move API state from in-memory/file mode to PostgreSQL-backed repositories.
+   - Add migration-backed models for projects, sites, runs, events, and result metrics.
+3. **Job orchestration robustness**
+   - Add retries/backoff, dead-letter handling, and cancellation semantics in worker flow.
+   - Add idempotent re-delivery protections for worker callback endpoint.
+4. **Web product surface**
+   - Add authn/authz, tenant/project isolation, and API tokens.
+   - Build UI/API for run submission, run history, logs, and result visualization.
+5. **Observability + operability**
+   - Expand metrics beyond counters (latency/error-rate/queue depth).
+   - Add structured logging, tracing, and run/audit correlation IDs.
+6. **Contract + integration tests**
+   - Add full integration tests against real Redis/Postgres and a mocked OpenHydroQual process.
+   - Add compatibility tests for data-contract versions across API/worker boundaries.
+
 ## Included
 - FastAPI app with:
   - `POST /v1/projects`
@@ -14,18 +46,32 @@ Reference scaffold for a real-time orchestration repo around OpenHydroQual/OHQue
   - `GET /v1/projects/{project_id}/sites` (supports `limit`, `offset`)
   - `POST /v1/simulations`
   - `POST /v1/projects/{project_id}/simulate` (queue all project sites)
+  - `POST /v1/projects/{project_id}/simulate/batch` (queue selected project sites with shared params)
   - `GET /v1/projects/{project_id}/stats`
   - `GET /v1/projects/{project_id}/simulations` (supports `status`, `limit`, `offset`)
+  - `GET /v1/projects/{project_id}/simulations/summary` (aggregated status/site counts for dashboards)
+  - `GET /v1/projects/{project_id}/sites/{site_id}/simulations/summary` (site-specific status summary)
+  - `GET /v1/projects/{project_id}/simulations/timeline/summary` (avg/p95 timeline metrics)
+  - `GET /v1/projects/{project_id}/simulations/failures` (failed/cancelled records with retry hints)
+  - `GET /v1/projects/{project_id}/simulations/queue` (queued/running jobs with stale indicators)
+  - `POST /v1/projects/{project_id}/simulations/retry-failed` (bulk retry by status with limit)
+  - `POST /v1/projects/{project_id}/simulations/prune` (dry-run or delete historical jobs by status/date)
   - `POST /v1/simulations/{job_id}/start`
   - `POST /v1/simulations/{job_id}/complete`
+  - `POST /v1/simulations/{job_id}/retry` (re-queue a child job from an existing run)
   - `POST /v1/simulations/{job_id}/cancel`
   - `POST /v1/simulations/{job_id}/fail`
   - `GET /v1/simulations/{job_id}`
+  - `GET /v1/simulations/{job_id}/lineage` (retry ancestry and child jobs)
+  - `GET /v1/simulations/{job_id}/timeline` (queue/run/total duration breakdown)
   - `GET /v1/simulations/{job_id}/events`
+  - `GET /v1/simulations/{job_id}/events/poll` (long-poll updates after known event index)
   - `GET /v1/simulations/{job_id}/results`
   - `POST /v1/internal/simulations/{job_id}/result` (worker callback)
   - `GET /metrics` (Prometheus-style counters)
+- `/metrics` includes outbound webhook delivery counters (`webhook_notify_success_total`, `webhook_notify_failure_total`)
 - Idempotency support via `X-Idempotency-Key` header on create endpoint
+- `POST /v1/projects/{project_id}/simulate/batch` also supports `X-Idempotency-Key` to replay prior batch responses.
 - `POST /v1/simulations` validates project/site existence and facility type match
 - Celery worker stub for queued simulation runs
 - JSON Schemas for request/result contracts (`simulation_request.v1`, `simulation_result.v1`)
@@ -34,18 +80,16 @@ Reference scaffold for a real-time orchestration repo around OpenHydroQual/OHQue
 
 ## Quick start
 ```bash
-cd templates/openhydroqual-rt-web
-python -m venv .venv
-source .venv/bin/activate
-pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt
-uvicorn apps.api.main:app --reload --port 8000
+cd openhydroqual-rt-web
+make install
+.venv/bin/uvicorn apps.api.main:app --reload --port 8000
 ```
 
 In a second terminal:
 ```bash
-cd templates/openhydroqual-rt-web
-source .venv/bin/activate
-celery -A apps.worker.tasks worker --loglevel=info
+cd openhydroqual-rt-web
+make install
+.venv/bin/celery -A apps.worker.tasks worker --loglevel=info
 ```
 
 ## Local API smoke flow
@@ -96,6 +140,19 @@ Minimum environment variables in AWS:
 - `RESULT_BACKEND` (ElastiCache endpoint)
 - `OHQUERY_BASE_URL` (internal OHQuery service URL)
 
+### Send/receive flow with AWS services
+- **Receive from AWS worker:** API accepts worker callbacks at `POST /v1/internal/simulations/{job_id}/result`.
+- **Send to AWS/web clients:** set `OUTBOUND_WEBHOOK_URL` to push job lifecycle events (`queued`, `started`, `completed`, `failed`, etc.) to an AWS endpoint (API Gateway, Lambda URL, EventBridge Pipe target, or your own webhook service).
+- **Receive in web clients:** call `GET /v1/simulations/{job_id}/events/poll?after_index=<n>&timeout_s=15` for long-poll incremental updates.
+- Optional write protection: set `WRITE_API_TOKEN` and pass `X-Api-Token` on mutating endpoints.
+- Batch idempotency cache TTL can be tuned via `OPERATION_IDEMPOTENCY_TTL_SECONDS` (default 86400).
+- Optional auth header for outbound events: set `OUTBOUND_WEBHOOK_TOKEN` (sent as `Authorization: Bearer <token>`).
+
+Example (Lambda Function URL or API Gateway webhook target):
+```bash
+export OUTBOUND_WEBHOOK_URL="https://<aws-endpoint>/job-events"
+export OUTBOUND_WEBHOOK_TOKEN="<shared-secret-token>"
+```
 
 
 ## OHQuery integration mode
@@ -106,9 +163,9 @@ Minimum environment variables in AWS:
 
 ## Testing
 ```bash
-cd templates/openhydroqual-rt-web
-make venv
+cd openhydroqual-rt-web
 make install
+make test-fast   # quick worker+adapter feedback loop
 make test
 ```
 
@@ -124,6 +181,7 @@ A GitHub Actions workflow is included at `.github/workflows/openhydroqual-rt-web
 Workers can push normalized results back to API using `POST /v1/internal/simulations/{job_id}/result`.
 Set `INTERNAL_API_TOKEN` and pass it in `X-Internal-Token` for simple protection.
 Accepted callback statuses are `completed` and `failed`.
+Lifecycle transitions are guarded; finalized jobs (`completed`/`failed`/`cancelled`) cannot transition to a different status.
 
 Example callback payload:
 
