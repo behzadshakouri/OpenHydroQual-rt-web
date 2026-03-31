@@ -361,6 +361,14 @@ class ReplayWebhookRequest(BaseModel):
     event_type: str | None = None
 
 
+class ExecuteActionRequest(BaseModel):
+    """!Payload for executing a recommended project action."""
+    action: Literal["requeue_stale", "retry_failures"]
+    dry_run: bool = True
+    stale_after_seconds: int = 900
+    limit: int = 100
+
+
 @app.get("/health")
 def health() -> dict:
     """!Return a lightweight health payload."""
@@ -414,6 +422,27 @@ def get_webhook_audit(limit: int = 50, only_failures: bool = False) -> dict:
         rows = [row for row in rows if row.get("success") is False]
     rows = rows[-limit:]
     return {"count": len(rows), "limit": limit, "only_failures": only_failures, "items": rows}
+
+
+@app.get("/v1/system/state")
+def get_system_state_snapshot() -> dict:
+    """!Return lightweight counts for core in-memory stores."""
+    with LOCK:
+        job_status_counts: dict[str, int] = {}
+        for job in JOBS.values():
+            status = job.get("status", "unknown")
+            job_status_counts[status] = job_status_counts.get(status, 0) + 1
+
+        return {
+            "projects_total": len(PROJECTS),
+            "sites_total": len(SITES),
+            "jobs_total": len(JOBS),
+            "job_status_counts": job_status_counts,
+            "idempotency_keys_total": len(IDEMPOTENCY_INDEX),
+            "operation_idempotency_total": len(OPERATION_IDEMPOTENCY),
+            "webhook_audit_total": len(WEBHOOK_AUDIT),
+            "metrics": dict(METRICS),
+        }
 
 
 @app.post("/v1/system/maintenance/cleanup")
@@ -1215,6 +1244,132 @@ def list_project_queue(
         "returned": len(sliced),
         "jobs": sliced,
     }
+
+
+@app.get("/v1/projects/{project_id}/diagnostics")
+def get_project_diagnostics(project_id: str, stale_after_seconds: int = 900) -> dict:
+    """!Return consolidated project diagnostics for operator dashboards."""
+    summary = get_project_simulations_summary(project_id=project_id)
+    timeline = get_project_timeline_summary(project_id=project_id)
+    failures = list_project_failures(project_id=project_id, include_cancelled=True, limit=1000, offset=0)
+    queue = list_project_queue(
+        project_id=project_id,
+        include_running=True,
+        stale_after_seconds=stale_after_seconds,
+        limit=1000,
+        offset=0,
+    )
+    stale_count = len([job for job in queue["jobs"] if job.get("is_stale")])
+    return {
+        "project_id": project_id,
+        "stale_after_seconds": stale_after_seconds,
+        "summary": summary,
+        "timeline_summary": timeline,
+        "failure_count": failures["count"],
+        "queue_count": queue["count"],
+        "stale_queue_count": stale_count,
+    }
+
+
+@app.get("/v1/projects/{project_id}/sites/{site_id}/diagnostics")
+def get_site_diagnostics(project_id: str, site_id: str, stale_after_seconds: int = 900) -> dict:
+    """!Return consolidated diagnostics for a specific project site."""
+    summary = get_site_simulations_summary(project_id=project_id, site_id=site_id)
+    failures = list_project_failures(project_id=project_id, include_cancelled=True, limit=1000, offset=0)
+    queue = list_project_queue(
+        project_id=project_id,
+        include_running=True,
+        stale_after_seconds=stale_after_seconds,
+        limit=1000,
+        offset=0,
+    )
+
+    site_failures = [row for row in failures["failures"] if row.get("site_id") == site_id]
+    site_queue = [row for row in queue["jobs"] if row.get("site_id") == site_id]
+    stale_site_queue = [row for row in site_queue if row.get("is_stale")]
+    return {
+        "project_id": project_id,
+        "site_id": site_id,
+        "stale_after_seconds": stale_after_seconds,
+        "summary": summary,
+        "failure_count": len(site_failures),
+        "queue_count": len(site_queue),
+        "stale_queue_count": len(stale_site_queue),
+    }
+
+
+@app.get("/v1/projects/{project_id}/actions")
+def get_project_actions(project_id: str, stale_after_seconds: int = 900) -> dict:
+    """!Return simple recommended operator actions based on current project state."""
+    diagnostics = get_project_diagnostics(project_id=project_id, stale_after_seconds=stale_after_seconds)
+    failures = list_project_failures(project_id=project_id, include_cancelled=True, limit=1000, offset=0)
+
+    unretried_failures = [row for row in failures["failures"] if not row.get("has_retry_child")]
+    actions: list[dict] = []
+    if diagnostics["stale_queue_count"] > 0:
+        actions.append(
+            {
+                "action": "requeue_stale",
+                "reason": f"{diagnostics['stale_queue_count']} stale queued/running jobs detected",
+                "endpoint": f"/v1/projects/{project_id}/simulations/requeue-stale",
+            }
+        )
+    if unretried_failures:
+        actions.append(
+            {
+                "action": "retry_failures",
+                "reason": f"{len(unretried_failures)} failed/cancelled jobs have no retry child",
+                "endpoint": f"/v1/projects/{project_id}/simulations/retry-failed",
+            }
+        )
+    if not actions:
+        actions.append(
+            {
+                "action": "none",
+                "reason": "No immediate remediation actions suggested",
+                "endpoint": None,
+            }
+        )
+
+    return {
+        "project_id": project_id,
+        "stale_after_seconds": stale_after_seconds,
+        "recommended_actions": actions,
+    }
+
+
+@app.post("/v1/projects/{project_id}/actions/execute")
+def execute_project_action(project_id: str, payload: ExecuteActionRequest, x_api_token: str | None = Header(default=None)) -> dict:
+    """!Execute a recommended project action with optional dry-run controls."""
+    _require_write_token(x_api_token)
+    if payload.action == "requeue_stale":
+        result = requeue_stale_simulations(
+            project_id=project_id,
+            payload=RequeueStaleRequest(
+                stale_after_seconds=payload.stale_after_seconds,
+                include_running=True,
+                limit=payload.limit,
+                dry_run=payload.dry_run,
+            ),
+            x_api_token=x_api_token,
+        )
+    else:
+        result = retry_project_simulations(
+            project_id=project_id,
+            payload=BulkRetryRequest(statuses=["failed", "cancelled"], limit=payload.limit),
+            x_api_token=x_api_token,
+        )
+        if payload.dry_run:
+            # Re-map retry response for dry-run semantics.
+            result = {
+                "project_id": project_id,
+                "dry_run": True,
+                "action": payload.action,
+                "candidate_jobs": result["matched_jobs"],
+                "requeue_count": 0,
+            }
+
+    return {"project_id": project_id, "action": payload.action, "result": result}
 
 @app.get("/v1/simulations/{job_id}")
 def get_simulation(job_id: str) -> dict:
