@@ -448,19 +448,25 @@ def get_system_state_snapshot() -> dict:
 @app.get("/v1/system/contracts")
 def get_contract_catalog() -> dict:
     """!Return canonical data-contract metadata for polyglot clients/workers."""
+    repo_root = Path(__file__).resolve().parents[2]
+    contracts = [
+        {
+            "name": "simulation_request.v1",
+            "schema_path": "packages/data-contracts/simulation_request.v1.schema.json",
+            "description": "Simulation submit payload contract.",
+        },
+        {
+            "name": "simulation_result.v1",
+            "schema_path": "packages/data-contracts/simulation_result.v1.schema.json",
+            "description": "Simulation result callback payload contract.",
+        },
+    ]
+    for row in contracts:
+        row["schema_exists"] = (repo_root / row["schema_path"]).exists()
+
     return {
-        "contracts": [
-            {
-                "name": "simulation_request.v1",
-                "schema_path": "packages/data-contracts/simulation_request.v1.schema.json",
-                "description": "Simulation submit payload contract.",
-            },
-            {
-                "name": "simulation_result.v1",
-                "schema_path": "packages/data-contracts/simulation_result.v1.schema.json",
-                "description": "Simulation result callback payload contract.",
-            },
-        ],
+        "contracts": contracts,
+        "missing_contracts": sum(1 for row in contracts if not row["schema_exists"]),
     }
 
 

@@ -7,6 +7,7 @@ This scaffold is implemented in Python, but the orchestration contract is HTTP/J
 - Receive worker results via `POST /v1/internal/simulations/{job_id}/result`.
 - Subscribe to lifecycle events with outbound webhooks (`OUTBOUND_WEBHOOK_URL`) or polling (`GET /v1/simulations/{job_id}/events/poll`).
 - Use idempotency (`X-Idempotency-Key`) for safe retries on create/batch operations.
+- Discover canonical contract metadata via `GET /v1/system/contracts` (`schema_path`, `schema_exists`, `missing_contracts`).
 
 ## Suggested C++ implementation tasks
 1. Create a small C++ client wrapper for submit/status/result/event APIs.
