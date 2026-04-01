@@ -29,3 +29,20 @@ def test_adapter_runs_openhydroqual_cli(monkeypatch) -> None:
 
     assert result["engine"] == "OpenHydroQualCLI"
     assert result["returncode"] == 0
+
+
+def test_adapter_maps_cli_timeout(monkeypatch) -> None:
+    """!Verify CLI timeout is converted to normalized adapter error."""
+    monkeypatch.setattr(ohquery_adapter, "OPENHYDROQUAL_CMD", "OpenHydroQualCLI")
+
+    def _fake_run(command, capture_output, text, timeout, check):  # noqa: ANN001
+        raise ohquery_adapter.subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr(ohquery_adapter.subprocess, "run", _fake_run)
+
+    try:
+        ohquery_adapter.run_ohquery_calculation({"script_path": "/tmp/in.ohq"})
+    except ohquery_adapter.OHQueryExecutionError as exc:
+        assert exc.code == "engine_timeout"
+    else:
+        raise AssertionError("expected OHQueryExecutionError")

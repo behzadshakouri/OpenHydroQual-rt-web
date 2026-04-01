@@ -5,7 +5,7 @@ import os
 
 from celery import Celery
 
-from .ohquery_adapter import run_ohquery_calculation
+from .ohquery_adapter import OHQueryExecutionError, run_ohquery_calculation
 
 
 BROKER_URL = os.getenv("BROKER_URL", "redis://localhost:6379/0")
@@ -33,12 +33,28 @@ def run_simulation(job_payload: dict) -> dict:
             "overflow": False,
         }
     else:
-        adapter_result = run_ohquery_calculation(parameters)
-        metrics = {
-            "peak_depth_m": float(adapter_result.get("peak_depth_m", 0.0)),
-            "infiltrated_volume_m3": float(adapter_result.get("infiltrated_volume_m3", 0.0)),
-            "overflow": bool(adapter_result.get("overflow", False)),
-        }
+        try:
+            adapter_result = run_ohquery_calculation(parameters)
+            metrics = {
+                "peak_depth_m": float(adapter_result.get("peak_depth_m", 0.0)),
+                "infiltrated_volume_m3": float(adapter_result.get("infiltrated_volume_m3", 0.0)),
+                "overflow": bool(adapter_result.get("overflow", False)),
+            }
+        except OHQueryExecutionError as exc:
+            return {
+                "job_id": job_payload.get("job_id"),
+                "status": "failed",
+                "result_contract": "simulation_result.v1",
+                "adapter": {
+                    "engine": "OHQuery",
+                    "base_url": OHQUERY_BASE_URL,
+                    "mock": MOCK_OHQUERY,
+                    "mock_mode": MOCK_OHQUERY,
+                    "raw": {"error_code": exc.code, "error_message": exc.message},
+                },
+                "error": {"code": exc.code, "message": exc.message},
+                "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            }
 
     return {
         "job_id": job_payload.get("job_id"),
