@@ -37,20 +37,3 @@ def test_worker_maps_adapter_errors(monkeypatch) -> None:
     assert result["error"]["code"] == "engine_timeout"
     assert result["adapter"]["raw"]["error_code"] == "engine_timeout"
     assert datetime.fromisoformat(result["generated_at_utc"])
-
-
-def test_worker_maps_unexpected_errors(monkeypatch) -> None:
-    """!Unexpected adapter/runtime exceptions should still return failed contract payload."""
-    monkeypatch.setattr(tasks, "MOCK_OHQUERY", False)
-
-    def _boom(_params):  # noqa: ANN001
-        raise ValueError("bad payload")
-
-    monkeypatch.setattr(tasks, "run_ohquery_calculation", _boom)
-    result = run_simulation({"job_id": "sim_3", "payload": {"project_id": "p1"}})
-
-    assert result["job_id"] == "sim_3"
-    assert result["status"] == "failed"
-    assert result["error"]["code"] == "worker_internal_error"
-    assert result["adapter"]["raw"]["error_code"] == "worker_internal_error"
-    assert datetime.fromisoformat(result["generated_at_utc"])

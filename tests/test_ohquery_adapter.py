@@ -46,3 +46,27 @@ def test_adapter_maps_cli_timeout(monkeypatch) -> None:
         assert exc.code == "engine_timeout"
     else:
         raise AssertionError("expected OHQueryExecutionError")
+
+
+def test_adapter_maps_invalid_http_payload(monkeypatch) -> None:
+    """!Verify non-JSON HTTP responses are surfaced as normalized adapter errors."""
+    monkeypatch.setattr(ohquery_adapter, "OPENHYDROQUAL_CMD", "")
+
+    class _FakeResponse:
+        status_code = 200
+        text = "<html>bad gateway</html>"
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):  # noqa: ANN201
+            raise ValueError("not json")
+
+    monkeypatch.setattr(ohquery_adapter.requests, "post", lambda *args, **kwargs: _FakeResponse())
+
+    try:
+        ohquery_adapter.run_ohquery_calculation({"project_id": "p1"})
+    except ohquery_adapter.OHQueryExecutionError as exc:
+        assert exc.code == "engine_invalid_response"
+    else:
+        raise AssertionError("expected OHQueryExecutionError")

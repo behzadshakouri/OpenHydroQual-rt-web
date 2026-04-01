@@ -92,5 +92,8 @@ def run_ohquery_calculation(parameters: dict[str, Any]) -> dict[str, Any]:
 
     try:
         return response.json()
-    except ValueError:
-        return {"raw_response": response.text}
+    except ValueError as exc:
+        raise OHQueryExecutionError(
+            "engine_invalid_response",
+            "OHQuery returned a non-JSON response payload",
+        ) from exc
