@@ -2,12 +2,15 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from apps.worker import ohquery_adapter
 
 
 def test_adapter_runs_openhydroqual_cli(monkeypatch) -> None:
     """!Verify adapter can execute OpenHydroQual CLI command when configured."""
-    monkeypatch.setattr(ohquery_adapter, "OPENHYDROQUAL_CMD", "OpenHydroQualCLI")
+    monkeypatch.setenv("OPENHYDROQUAL_CMD", "OpenHydroQualCLI")
+    monkeypatch.setenv("OHQUERY_TIMEOUT_SECONDS", "30")
 
     def _fake_run(command, capture_output, text, timeout, check):  # noqa: ANN001
         assert "OpenHydroQualCLI" in command[0]
@@ -16,7 +19,7 @@ def test_adapter_runs_openhydroqual_cli(monkeypatch) -> None:
         assert capture_output is True
         assert text is True
         assert check is False
-        assert timeout == ohquery_adapter.OHQUERY_TIMEOUT_SECONDS
+        assert timeout == 30.0
         return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr(ohquery_adapter.subprocess, "run", _fake_run)
@@ -33,24 +36,21 @@ def test_adapter_runs_openhydroqual_cli(monkeypatch) -> None:
 
 def test_adapter_maps_cli_timeout(monkeypatch) -> None:
     """!Verify CLI timeout is converted to normalized adapter error."""
-    monkeypatch.setattr(ohquery_adapter, "OPENHYDROQUAL_CMD", "OpenHydroQualCLI")
+    monkeypatch.setenv("OPENHYDROQUAL_CMD", "OpenHydroQualCLI")
 
     def _fake_run(command, capture_output, text, timeout, check):  # noqa: ANN001
         raise ohquery_adapter.subprocess.TimeoutExpired(command, timeout)
 
     monkeypatch.setattr(ohquery_adapter.subprocess, "run", _fake_run)
 
-    try:
+    with pytest.raises(ohquery_adapter.OHQueryExecutionError) as exc_info:
         ohquery_adapter.run_ohquery_calculation({"script_path": "/tmp/in.ohq"})
-    except ohquery_adapter.OHQueryExecutionError as exc:
-        assert exc.code == "engine_timeout"
-    else:
-        raise AssertionError("expected OHQueryExecutionError")
+    assert exc_info.value.code == "engine_timeout"
 
 
 def test_adapter_maps_invalid_http_payload(monkeypatch) -> None:
     """!Verify non-JSON HTTP responses are surfaced as normalized adapter errors."""
-    monkeypatch.setattr(ohquery_adapter, "OPENHYDROQUAL_CMD", "")
+    monkeypatch.delenv("OPENHYDROQUAL_CMD", raising=False)
 
     class _FakeResponse:
         status_code = 200
@@ -64,9 +64,6 @@ def test_adapter_maps_invalid_http_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(ohquery_adapter.requests, "post", lambda *args, **kwargs: _FakeResponse())
 
-    try:
+    with pytest.raises(ohquery_adapter.OHQueryExecutionError) as exc_info:
         ohquery_adapter.run_ohquery_calculation({"project_id": "p1"})
-    except ohquery_adapter.OHQueryExecutionError as exc:
-        assert exc.code == "engine_invalid_response"
-    else:
-        raise AssertionError("expected OHQueryExecutionError")
+    assert exc_info.value.code == "engine_invalid_response"

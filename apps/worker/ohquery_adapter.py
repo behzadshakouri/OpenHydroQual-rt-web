@@ -8,9 +8,20 @@ from typing import Any
 import requests
 
 
-OHQUERY_BASE_URL = os.getenv("OHQUERY_BASE_URL", "http://localhost:8080")
-OHQUERY_TIMEOUT_SECONDS = float(os.getenv("OHQUERY_TIMEOUT_SECONDS", "30"))
-OPENHYDROQUAL_CMD = os.getenv("OPENHYDROQUAL_CMD", "").strip()
+DEFAULT_OHQUERY_BASE_URL = "http://localhost:8080"
+DEFAULT_OHQUERY_TIMEOUT_SECONDS = 30.0
+
+
+def _ohquery_base_url() -> str:
+    return os.getenv("OHQUERY_BASE_URL", DEFAULT_OHQUERY_BASE_URL)
+
+
+def _ohquery_timeout_seconds() -> float:
+    return float(os.getenv("OHQUERY_TIMEOUT_SECONDS", str(DEFAULT_OHQUERY_TIMEOUT_SECONDS)))
+
+
+def _openhydroqual_cmd() -> str:
+    return os.getenv("OPENHYDROQUAL_CMD", "").strip()
 
 
 class OHQueryExecutionError(RuntimeError):
@@ -27,8 +38,12 @@ def run_ohquery_calculation(parameters: dict[str, Any]) -> dict[str, Any]:
 
     Expected OHQuery service behavior is based on existing terminal/OHQuery server implementation.
     """
-    if OPENHYDROQUAL_CMD:
-        command = shlex.split(OPENHYDROQUAL_CMD)
+    timeout_seconds = _ohquery_timeout_seconds()
+    openhydroqual_cmd = _openhydroqual_cmd()
+    ohquery_base_url = _ohquery_base_url()
+
+    if openhydroqual_cmd:
+        command = shlex.split(openhydroqual_cmd)
         cli_args = parameters.get("cli_args", [])
         if isinstance(cli_args, list):
             command.extend(str(arg) for arg in cli_args)
@@ -44,13 +59,13 @@ def run_ohquery_calculation(parameters: dict[str, Any]) -> dict[str, Any]:
                 command,
                 capture_output=True,
                 text=True,
-                timeout=OHQUERY_TIMEOUT_SECONDS,
+                timeout=timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
             raise OHQueryExecutionError(
                 "engine_timeout",
-                f"OpenHydroQual command timed out after {OHQUERY_TIMEOUT_SECONDS} seconds",
+                f"OpenHydroQual command timed out after {timeout_seconds} seconds",
             ) from exc
         if run.returncode != 0:
             raise OHQueryExecutionError(
@@ -67,14 +82,14 @@ def run_ohquery_calculation(parameters: dict[str, Any]) -> dict[str, Any]:
 
     try:
         response = requests.post(
-            f"{OHQUERY_BASE_URL.rstrip('/')}/calculate",
+            f"{ohquery_base_url.rstrip('/')}/calculate",
             json=parameters,
-            timeout=OHQUERY_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
         )
     except requests.Timeout as exc:
         raise OHQueryExecutionError(
             "engine_timeout",
-            f"OHQuery HTTP call timed out after {OHQUERY_TIMEOUT_SECONDS} seconds",
+            f"OHQuery HTTP call timed out after {timeout_seconds} seconds",
         ) from exc
     except requests.RequestException as exc:
         raise OHQueryExecutionError(
