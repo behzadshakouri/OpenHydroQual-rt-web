@@ -55,6 +55,27 @@ def run_simulation(job_payload: dict) -> dict:
                 "error": {"code": exc.code, "message": exc.message},
                 "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             }
+        except Exception as exc:  # pragma: no cover - safety guard for unexpected runtime errors
+            return {
+                "job_id": job_payload.get("job_id"),
+                "status": "failed",
+                "result_contract": "simulation_result.v1",
+                "adapter": {
+                    "engine": "OHQuery",
+                    "base_url": OHQUERY_BASE_URL,
+                    "mock": MOCK_OHQUERY,
+                    "mock_mode": MOCK_OHQUERY,
+                    "raw": {
+                        "error_code": "worker_internal_error",
+                        "error_message": str(exc),
+                    },
+                },
+                "error": {
+                    "code": "worker_internal_error",
+                    "message": f"Unexpected worker error: {exc}",
+                },
+                "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            }
 
     return {
         "job_id": job_payload.get("job_id"),
