@@ -1,5 +1,7 @@
 # openhydroqual-rt-web (starter scaffold)
 
+## About
+
 Reference scaffold for a real-time orchestration repo around OpenHydroQual/OHQuery.
 
 ## Current status (March 30, 2026)
@@ -12,6 +14,17 @@ This repository is currently a **starter orchestration scaffold**:
 If your goal is production web usage for OpenHydroQual
 ([ArashMassoudieh/OpenHydroQual](https://github.com/ArashMassoudieh/OpenHydroQual)),
 the next sections describe what to build next.
+
+## OpenHydroQual resources
+
+| Resource | Link |
+|---|---|
+| Project website | [openhydroqual.com](https://openhydroqual.com/) |
+| Documentation and tutorials | [OpenHydroQual knowledge base](https://openhydroqual.com/knowledge-base/) |
+| Searchable examples | [examples.openhydroqual.com](https://examples.openhydroqual.com/) |
+| Example source repository | [ArashMassoudieh/OpenHydroQual-Examples](https://github.com/ArashMassoudieh/OpenHydroQual-Examples) |
+| Source code and releases | [ArashMassoudieh/OpenHydroQual](https://github.com/ArashMassoudieh/OpenHydroQual) |
+| Video tutorials | [OpenHydroQual on YouTube](https://www.youtube.com/@openhydroqual218) |
 
 ## What to build next (recommended sequence)
 1. **Execution integration (highest priority)**
